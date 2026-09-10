@@ -35,8 +35,9 @@ committed); more detail in `planning/ENVIRONMENT.md` and `/mnt/c/dev/experiments
   text, and never a stack trace.
 - Edit files with targeted patches; do not rewrite files you do not own. File ownership is by path
   prefix and is assigned per workstream in `planning/PLAN.md`.
-- One test file per source file, alongside it in `core/src/test/kotlin/`. Line coverage on `:core` is
-  100% — a workstream is not done because it compiles.
+- One test file per source file, alongside it in `core/src/test/kotlin/`. Line coverage on `:core` must
+  be **at least 95%** (`./gradlew :core:coverageGate` prints the number) — a workstream is not done
+  because it compiles.
 
 ## What v1 deliberately does not have
 

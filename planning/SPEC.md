@@ -357,9 +357,12 @@ startup error (fail loud), not a silent fallback to defaults.
 | `ph.ui` | JVM unit tests over event lists → `UiState` |
 | `:app` | Compiles, `assembleDebug` produces an APK, installs on the API-36 emulator; UI verified by an on-device smoke (real shell, real endpoint) rather than screenshot tests |
 
-Wave gate = `./gradlew :core:test :core:jacocoTestReport :app:assembleDebug :app:lintDebug` green,
-`:core` line coverage 100% (jacoco, no exclusions except generated serialisers if any), and the
-on-device smoke reproduced by the orchestrator personally before the wave is called done.
+Wave gate = `./gradlew :core:test :core:coverageGate :app:assembleDebug :app:lintDebug` green, `:core`
+**line coverage ≥ 95%** (measured by `:core:coverageGate`, which parses the JaCoCo report and prints the
+number; the frozen declaration files from §2 are excluded from the measurement, implementation classes
+are not), and the on-device smoke reproduced by the orchestrator personally before the wave is called
+done. 100% was the original bar; Ars lowered it to 95% on 2026-09-10 ("We don't need 100% code coverage
+for this, 95% is enough").
 
 ## 5. Explicitly out of scope for v1
 

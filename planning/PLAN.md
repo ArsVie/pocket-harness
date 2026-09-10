@@ -60,11 +60,32 @@ on-device evidence personally. Child reports are not evidence.
 - Wire `:app` to `:core` end to end; delete the placeholder paths W0.1 created.
 - Live path: a local OpenAI-compatible mock server reachable from the emulator, so the full loop
   (prompt → tools → transcript → threads UI) is exercised without spending real tokens.
-- On-device: real `bash` through the shipped userland, `str_replace_editor` on a real workspace,
-  trust prompt in DEFAULT, the same command in YOLO, floor denial, `rm` landing in `.trash/`.
+- On-device: real shell execution through the shipped userland, `str_replace_editor` on a real
+  workspace, trust prompt in DEFAULT, the same command in YOLO, floor denial, `rm` landing in `.trash/`.
 - Persistence: kill and reopen the app mid-session; transcript and mode survive; a kill mid-turn
   closes with `INTERRUPTED`.
 - Backgrounding: turn continues with the app backgrounded while the foreground service runs.
+
+### Wave 2 reachability — expected to be the awkward part
+
+The mock endpoint runs in WSL; the app runs in an emulator that **lives on the Windows host**, and
+`adb` itself talks to the Windows adb server. That is three different hosts in the path, so "just use
+localhost" is wrong and the options need testing in order:
+
+| Attempt | Address the app uses | Why it might work / fail |
+|---|---|---|
+| 1 | `http://10.0.2.2:8111` | The emulator's alias for *its* host — which is Windows. Only works if the mock is reachable there, i.e. if WSL's port is forwarded or the mock is moved to Windows. Expect to fail unless mirrored networking exposes it. |
+| 2 | `http://127.0.0.1:8111` + `adb reverse tcp:8111 tcp:8111` | `adb reverse` tunnels to the machine running the **adb server** (Windows), not to WSL. Verify where it terminates before trusting it — this is the most likely trap. |
+| 3 | `http://<WSL eth IP>:8111` | WSL is on `10.8.33.x`/`10.8.35.x`; the emulator may reach it directly over the Windows network stack. Bind the mock to `0.0.0.0` (it already defaults to that) and try this when 1 and 2 fail. |
+| 4 | Move the mock to Windows | Fallback that definitely works: run `scripts/mock-openai.py` under Windows Python and use `10.0.2.2`. Keeps the same script and the same conformance checker. |
+
+Test the address with a plain HTTP GET from inside the app (or from `adb shell` with `toybox wget`/curl
+if present) before wiring the UI to it, and record which one won in `ENVIRONMENT.md`.
+
+Second integration question to settle at the same time: the loop needs a `cwd` (workspace) per
+session. Working assumption is `filesDir/workspace/<session-id>/`, created on first use, with the
+`.trash/` and spill directories inside it. Confirm the tools' expectations match (`BashTool` derives
+its spill directory from `ctx.cwd`; `OutputClipper` writes to the path it is given).
 
 ## Wave 3 — hardening and handoff
 

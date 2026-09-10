@@ -1,9 +1,15 @@
 #!/bin/sh
 # PocketHarness `rm` shim — moving to trash instead of unlinking (ADR-004 §5).
 #
-# Deployed by the app with @SHELL@ substituted for the absolute path of the shipped busybox
-# shell, and placed FIRST on PATH ahead of the busybox applets. `PH_TRASH_DIR` is exported by the
-# tool layer as `<workspace>/.trash`; if it is unset the shim falls back to `$PWD/.trash`.
+# Deployed by the app with @SHELL@ substituted for the absolute path of the working shell, its
+# shebang rewritten to match, and placed FIRST on PATH. `PH_TRASH_DIR` is exported by the tool
+# layer as `<workspace>/.trash`; if it is unset the shim falls back to `$PWD/.trash`.
+#
+# Only applets the deployed shell can actually run are used: mkdir/date/mv/basename/ls come from
+# the shell's own applet dir (`/system/bin` for the platform shell, the busybox symlink farm
+# otherwise). The shipped static busybox cannot dispatch *any* applet in the app process — every
+# dispatch dies with SIGSYS (signal 31, exit 159) under Android's inherited seccomp filter — so a
+# busybox-interpreted shim would be dead. See planning/ENVIRONMENT.md and files/exec-probe.txt.
 #
 # Known limits, accepted in ADR-002 and ADR-004: this intercepts `rm` invoked by name. A command
 # that reaches the applet another way (`busybox rm -rf x`) or a binary that calls unlink(2) is not

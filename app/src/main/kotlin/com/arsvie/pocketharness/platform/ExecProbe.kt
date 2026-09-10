@@ -86,6 +86,21 @@ object ExecProbe {
             row("A applet: libbusybox echo", listOf(nativeBusybox.absolutePath, "echo", "A_ECHO_OK"), aEnv)
             row("A applet: libbusybox true", listOf(nativeBusybox.absolutePath, "true"), aEnv)
             row("A shell: libbusybox sh -c echo", listOf(nativeBusybox.absolutePath, "sh", "-c", "echo A_ASH_OK; uname -a"), aEnv)
+
+            // busybox picks its applet from argv[0]'s basename, so a binary named `libbusybox.so`
+            // exits 127 "applet not found" before any applet code runs. A symlink named `busybox`
+            // pointing at the native-library file fixes the name while still exec'ing the bytes
+            // from nativeLibraryDir — the only way to tell a naming failure from a seccomp failure.
+            val bbLink = File(context.filesDir, "probe-shell").apply { mkdirs() }.let { File(it, "busybox") }
+            try {
+                bbLink.delete()
+                android.system.Os.symlink(nativeBusybox.absolutePath, bbLink.absolutePath)
+                row("A via symlink named busybox: echo", listOf(bbLink.absolutePath, "echo", "A_LINK_ECHO_OK"), aEnv)
+                row("A via symlink named busybox: sh -c", listOf(bbLink.absolutePath, "sh", "-c", "echo A_LINK_ASH_OK"), aEnv)
+                row("A via symlink named busybox: --help", listOf(bbLink.absolutePath, "--help"), aEnv)
+            } catch (t: Throwable) {
+                line("[A symlink busybox -> libbusybox.so] THREW ${t.javaClass.name}: ${t.message}")
+            }
         } else {
             line("[A] nativeLibraryDir has no libbusybox.so -> Experiment A cannot run")
         }
@@ -149,7 +164,7 @@ object ExecProbe {
             Userland.execDirect(
                 smokeArgv,
                 cwd = workspace,
-                env = mapOf("PATH" to chosen.pathPrefix, "PH_TRASH_DIR" to trash.absolutePath),
+                env = mapOf("PATH" to chosen.pathPrefix(), "PH_TRASH_DIR" to trash.absolutePath),
             )
         } catch (t: Throwable) {
             Userland.DirectResult("", "${t.javaClass.name}: ${t.message}", -1)

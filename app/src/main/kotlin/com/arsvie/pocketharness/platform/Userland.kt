@@ -20,7 +20,7 @@ enum class ShellKind {
  * Candidates, in preference order, with the evidence that picks between them recorded in
  * `files/exec-probe.txt` (ExecProbe):
  *   1. [nativeBinary] `nativeLibraryDir/libbusybox.so` — the static busybox packaged as a native
- *      library so it is exec'd from `/data/app/~~*/<pkg>*/lib/arm64/`, not from app data.
+ *      library so it is exec'd from the APK's native library dir, not from app data.
  *   2. [systemShell] `/system/bin/sh` — the platform's bionic mksh. Android's own tools are built
  *      for the app seccomp filter, so this is the candidate userland if (1) cannot dispatch applets.
  *   3. [binary] the asset-unpacked busybox at `files/userland/busybox` — retained as the fallback
