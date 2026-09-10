@@ -1,0 +1,27 @@
+{
+  "description": "Basic two-step loop: the model asks for a directory listing, then summarises it. Used to exercise prompt assembly -> tool dispatch -> transcript on a device without a real provider.",
+  "steps": [
+    {
+      "reasoning": "The user wants to know what is here, so a listing comes first.",
+      "text": null,
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "ls -la"
+          }
+        }
+      ],
+      "finish_reason": "tool_calls"
+    },
+    {
+      "reasoning": "I have the listing; summarise without repeating it verbatim.",
+      "text": "I ran a directory listing. Send the next instruction and I will work on it.",
+      "finish_reason": "stop"
+    },
+    {
+      "text": "Nothing further is queued, so this turn is done.",
+      "finish_reason": "stop"
+    }
+  ]
+}

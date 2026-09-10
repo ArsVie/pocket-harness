@@ -60,6 +60,9 @@ interface Clock { fun nowMillis(): Long }
 ```kotlin
 enum class Role { SYSTEM, USER, ASSISTANT, TOOL }
 
+/** A tool's advertised JSON schema; `parametersJson` is the raw JSON Schema object string. */
+data class ToolSchema(val name: String, val description: String, val parametersJson: String)
+
 data class ToolCallRequest(val id: String, val name: String, val argumentsJson: String)
 
 data class ChatMessage(
@@ -176,10 +179,13 @@ Format (ADR-005 §7):
 - An index file (`<filesDir>/sessions/index.json`) holds the inbox rows; it is a **cache** and must be
   rebuildable by scanning session directories. Deleting it must not lose data.
 
-### 2.4 `ph.tools`
+### 2.4 `ph.tools` and `ph.policy`
+
+Wire types (`ToolSchema`, `ToolCallRequest`) live in `ph.model`; `ExecutionMode`, `PolicyFloor`,
+`PolicyDecision`, `TrustStore` and `TrashPolicy` live in `ph.policy`. `ph.tools` holds only the
+tool surface itself:
 
 ```kotlin
-data class ToolSchema(val name: String, val description: String, val parametersJson: String)
 data class ToolContext(val cwd: String, val mode: ExecutionMode, val callId: String)
 interface Tool { val schema: ToolSchema; suspend fun run(call: ToolCallRequest, ctx: ToolContext): ToolOutcome }
 
@@ -279,9 +285,10 @@ data class AssembledPrompt(val system: ChatMessage, val history: List<ChatMessag
 ### 2.6 `ph.agent`
 
 ```kotlin
-class AgentLoop(deps…, private val config: LoopConfig) {
-    fun run(session: Session, preset: Preset, steering: Channel<String>): Flow<LoopEvent>
-    suspend fun stop()
+interface AgentRunner {
+    fun run(session: Session, preset: Preset): Flow<LoopEvent>
+    suspend fun steer(text: String)
+    fun stop()
 }
 sealed interface LoopEvent {
     data class TurnStarted(val turn: Int)
@@ -323,8 +330,11 @@ sealed interface Block {
                         val output: String?, val isError: Boolean, val expandedByDefault: Boolean) : Block
 }
 object ThreadProjector { fun project(header: SessionHeader, events: List<SessionEvent>,
-                                     live: List<LoopEvent>, mode: ExecutionMode): OpenThread }
+                                     live: List<LoopEvent>, mode: ExecutionMode,
+                                     running: Boolean): OpenThread }
 ```
+
+`ThreadProjector` is an interface in the frozen contract and a pure implementation by W1.E.
 
 The projector is pure and lives in `:core` so the thread view's logic is unit-tested without Compose.
 `:app` renders `UiState` and nothing else.

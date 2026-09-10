@@ -1,0 +1,29 @@
+{
+  "description": "Failure paths. Step 1 is a 429 (the client must retry), step 2 a 500 (retry), step 3 a 200 body with no choices (MALFORMED_RESPONSE), step 4 a healthy answer so the turn can end. Run with a script pointer that starts at this file to test retry and error rendering.",
+  "steps": [
+    {
+      "http": 429,
+      "body": {
+        "error": {
+          "message": "rate limited by the mock",
+          "type": "rate_limit_error"
+        }
+      }
+    },
+    {
+      "http": 500,
+      "body": {
+        "error": {
+          "message": "mock server error"
+        }
+      }
+    },
+    {
+      "malformed": true
+    },
+    {
+      "text": "Recovered after the injected failures.",
+      "finish_reason": "stop"
+    }
+  ]
+}

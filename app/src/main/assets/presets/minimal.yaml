@@ -1,0 +1,39 @@
+# PocketHarness preset: `minimal` (SPEC §2.5 / §3 tunables; ADR-002 §port of the reference preset).
+# A missing or unparsable file is a startup error, not a silent fallback to defaults (SPEC §3).
+# The model *route* (baseUrl / model / apiKeyRef / reasoningEfforts) is not here: it is user-editable
+# in Settings and its key lives in EncryptedSharedPreferences (ADR-003 §6).
+id: minimal
+
+# `persona` is the entire system message (complete: true means nothing may append to it).
+persona: >-
+  You are a coding agent running on an Android device: read files before editing them, use the
+  shell to build and test your work, and report failures honestly instead of guessing.
+
+complete: true
+includeRuntimeContext: false
+
+tools:
+  - bash
+  - str_replace_editor
+
+budgets:
+  commandTimeoutMs: 300000
+  maxOutputLines: 2000
+  maxOutputChars: 32000
+  spillHeadChars: 16000
+  spillTailChars: 8000
+  contextCapTokens: 250000
+  charsPerToken: 3.5
+  pruneThresholdChars: 24000
+  pruneHeadChars: 8000
+  pruneTailChars: 4000
+  verbatimToolResults: 4
+
+loop:
+  turnCap: null
+  toolCallsPerStepCap: 8
+  repeatWarnAfter: 2
+  modelRetries: 2
+  retryBackoffMs:
+    - 250
+    - 750
