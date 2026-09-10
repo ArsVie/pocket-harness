@@ -14,7 +14,7 @@ android {
 
     defaultConfig {
         applicationId = "com.arsvie.pocketharness"
-        minSdk = 24
+        minSdk = 28 // ADR-005 §8: same pin as targetSdk. Also the floor for java.lang.Process#waitFor(timeout)
         targetSdk = 28 // deliberate: keeps exec of app-data files legal (ADR-001 / ADR-005 §8)
         versionCode = 1
         versionName = "0.1.0"
@@ -65,6 +65,9 @@ android {
 
 dependencies {
     implementation(project(":core"))
+
+    // Shell.exec is suspend; the probe runs it with runBlocking off the main thread.
+    implementation(libs.kotlinx.coroutines.core)
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)

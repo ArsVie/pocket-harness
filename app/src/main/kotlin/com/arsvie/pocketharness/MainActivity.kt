@@ -4,35 +4,52 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
+import com.arsvie.pocketharness.platform.ExecProbe
+import com.arsvie.pocketharness.ui.Fixtures
+import com.arsvie.pocketharness.ui.ScreenScaffold
+import com.arsvie.pocketharness.ui.SettingsScreen
+import com.arsvie.pocketharness.ui.ThreadListScreen
+import com.arsvie.pocketharness.ui.ThreadViewScreen
+import ph.policy.ExecutionMode
+import ph.ui.SettingsState
+import ph.ui.UiState
 
 /**
- * Wave-0 shell. A later workstream replaces this with the three-screen thread UI (ADR-005).
- * For now it proves the APK builds, installs, launches, and that the preset asset is packaged.
+ * The app shell (ADR-005): three screens — thread list, thread view, settings — rendered from
+ * `ph.ui.UiState`. No logic lives here; the state comes from fixtures until `:core`'s projector and
+ * stores are wired. On start it also kicks off the in-app exec probe, which is the Wave-0 proof
+ * that the shipped userland runs in-process on this device.
  */
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Proof that app/src/main/assets/presets/minimal.yaml is packaged in the APK.
+        // Load-bearing smoke: unpack the userland and exec it in this process. Writes
+        // filesDir/exec-probe.txt. Off the main thread; never throws into the UI.
+        Thread {
+            try {
+                ExecProbe.run(applicationContext)
+            } catch (t: Throwable) {
+                Log.e(TAG, "exec probe crashed", t)
+            }
+        }.start()
+
         val presetBytes = assets.open("presets/minimal.yaml").use { it.readBytes().size }
         Log.i(TAG, "preset asset presets/minimal.yaml packaged: $presetBytes bytes")
 
         setContent {
             MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    PlaceholderScreen(presetBytes = presetBytes)
+                Surface(modifier = Modifier) {
+                    PocketHarnessApp(Fixtures.ui)
                 }
             }
         }
@@ -44,16 +61,37 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun PlaceholderScreen(presetBytes: Int) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
+private fun PocketHarnessApp(initial: UiState) {
+    // The one piece of app-owned state on these screens: the execution mode, which the settings
+    // screen's single switch drives (ADR-004 §1). Everything else is projected from `ph.ui`.
+    var mode by remember { mutableStateOf(initial.settings?.mode ?: ExecutionMode.DEFAULT) }
+    val settings = initial.settings
+    val settingsState: SettingsState? = settings?.copy(mode = mode)
+    var tab by remember { mutableStateOf(0) }
+    var openId by remember { mutableStateOf(initial.threads.firstOrNull()?.id) }
+
+    val tabs = listOf("Threads", "Thread", "Settings")
+    val subtitles = listOf(
+        "${initial.threads.size} threads",
+        initial.open?.title ?: "no thread open",
+        "mode " + mode.name,
+    )
+
+    ScreenScaffold(
+        title = "PocketHarness",
+        subtitle = subtitles[tab],
+        tabs = tabs,
+        selected = tab,
+        onSelect = { tab = it },
     ) {
-        Text(text = "PocketHarness", style = MaterialTheme.typography.headlineMedium)
-        Text(
-            text = "Scaffold OK — preset asset: $presetBytes bytes",
-            style = MaterialTheme.typography.bodyMedium,
-        )
+        when (tab) {
+            0 -> ThreadListScreen(threads = initial.threads, onOpen = { id ->
+                openId = id
+                tab = 1
+            })
+            1 -> initial.open?.let { ThreadViewScreen(it.copy(mode = mode)) }
+                ?: ThreadListScreen(threads = initial.threads, onOpen = { openId = it })
+            else -> settingsState?.let { SettingsScreen(it) { newMode -> mode = newMode } }
+        }
     }
 }

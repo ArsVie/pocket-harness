@@ -14,29 +14,46 @@ plus, at the end of a wave, an on-device smoke the orchestrator performs persona
 
 ---
 
-## Wave 0 — foundation (sequential, blocking)
+## Wave 0 — foundation (COMPLETE, gate verified by the orchestrator)
 
-| # | Task | Owner | Owns | Gate |
-|---|---|---|---|---|
-| W0.1 | Gradle scaffold: root `settings.gradle.kts`, `gradle/libs.versions.toml`, wrapper, `:core` (`kotlin("jvm")`, kotlinx-serialization, OkHttp, coroutines, JUnit5, MockWebServer, jacoco), `:app` (AGP, Compose, `compileSdk 36`, `targetSdk 28`, `minSdk 24`, `extractNativeLibs=true`), `local.properties`, `.gitignore`, `app/src/main/assets/presets/minimal.yaml` | subagent | all build files, `app/src/main/**`, `gradle/**` | `:core:test` green (placeholder test), `:app:assembleDebug` produces an APK, installed on `emulator-5554` |
-| W0.2 | Freeze contracts: `core/src/main/kotlin/ph/**` interfaces + data types exactly as in `SPEC.md` §2, compiling, no logic | orchestrator | `core/src/main/kotlin/ph/**` | `:core:compileKotlin` green |
-| W0.3 | Userland: busybox static arm64 in `userland/`, `rm` shim, licences + provenance + sha256, packaging into the APK, and an exec probe that proves the app can run the shell from the device | subagent | `userland/**`, probe Activity | `adb shell run-as <pkg> cat files/exec-probe.txt` shows busybox output on `emulator-5554` |
-
-W0.3 depends on W0.1 (needs an APK); W0.2 is independent of both and is the orchestrator's own work.
-
-## Wave 1 — five parallel workstreams (contracts frozen)
-
-| # | Task | Owns | Contents |
+| # | Task | Status | Evidence |
 |---|---|---|---|
-| W1.A | `ph.model` | `core/src/{main,test}/kotlin/ph/model/**` | OpenAI chat-completions client (non-streaming), request-body shape, `reasoning_effort` validation, retry/backoff, error classification, DTOs, `SecretStore`-backed auth |
-| W1.B | `ph.session` | `core/src/{main,test}/kotlin/ph/session/**` | JSONL log (header + contiguous `seq`), torn-tail repair, `SessionStore`, index cache + rebuild, summaries, mode re-derivation |
-| W1.C | `ph.tools` | `core/src/{main,test}/kotlin/ph/tools/**` | `bash`, `str_replace_editor`, clipping + spill, `ToolOutcome` rendering, floor, trust gate, trash shim, dispatcher |
-| W1.D | `ph.prompt` + `ph.agent` | `core/src/{main,test}/kotlin/ph/{prompt,agent}/**` | preset YAML loader, prompt assembly, deterministic pruning + context cap, linear loop, steering, stuck warning, abort |
-| W1.E | `:app` + `ph.ui` | `app/**`, `core/src/{main,test}/kotlin/ph/ui/**` | `ThreadProjector`, thread list/thread view/settings in 2010 chrome, bubbles + tool rows + thinking blocks, mode switch, route settings, key storage (Keystore), foreground service, battery-optimization disclaimer, `Shell`/`ShellBinaries` implementations |
+| W0.1 | Gradle scaffold | **done** | `:core:test`, `:app:assembleDebug`, `:app:lintDebug` all green; APK installs and launches on `emulator-5554` (1.2 s, window focused, no `AndroidRuntime` entries). Versions: Gradle 9.7.1, AGP 9.4.0, Kotlin 2.4.20, Compose BOM 2026.06.01, JUnit 6.1.3, JDK 21, JVM target 17. |
+| W0.2 | Frozen contracts + shared fakes + tool schemas | **done** | `core/src/main/kotlin/ph/**` (compile-verified), `core/src/test/kotlin/ph/testing/Fakes.kt`, `ph/tools/ToolSchemas.kt` + golden test |
+| W0.3 | Userland: busybox + shim + verifier | **done** | `userland/` (sha256 `e383c8bc…`), `scripts/test-userland.sh` 9/9, `scripts/mock-openai.py` selftest 7/7 |
+| — | W^X exec path | **resolved** | exec from the app data dir at `targetSdk 28` verified on API 36 (see `ENVIRONMENT.md`); in-process proof is W1.E2's deliverable |
 
-Rules for every workstream: no literal tunables (all numbers from `Preset`/`Budgets`/`LoopConfig`),
-one test file per source file, no edits outside the owned prefix, no interface changes (raise them to
-the orchestrator instead).
+Known deviations from the original plan, recorded rather than smoothed over:
+
+- The scaffold landed as `:core` + `:app` but the original Wave 1 split (five workstreams) was cut
+  finer into **eight** when the scaffold child timed out *after* writing its files but before
+  verifying them. A ~600 s child budget covers one module plus its tests plus one build; "scaffold AND
+  device verification" was too much for one child.
+- `app/build.gradle.kts` disables exactly one lint check (`ExpiredTargetSdkVersion`, a Google Play
+  policy) because `targetSdk 28` is the ADR-001 decision. Every other check remains fatal.
+- The scaffold's three-clause persona was replaced with the reference's single sentence; device
+  guidance moved into `bash`'s description, which is where the research puts it. The tool schemas are
+  orchestrator-owned so the request prefix cannot drift.
+
+## Wave 1 — eight parallel workstreams (dispatched)
+
+Each has exact file-path ownership and a fixed interface contract; none may edit a frozen file or
+another stream's paths. Briefs in `WAVE1-BRIEFS.md`.
+
+| # | Stream | Owns | Contract |
+|---|---|---|---|
+| W1.A | `ph.model` | `model/OpenAiClient.kt` | SPEC §2.2, ADR-003 |
+| W1.B | `ph.session` | `session/JsonlSessionLog.kt`, `session/FileSessionStore.kt` | SPEC §2.3 |
+| W1.C1 | tools: bash + dispatcher + floor | `tools/BashTool.kt`, `OutputClipper.kt`, `DefaultToolDispatcher.kt`, `DefaultPolicyFloor.kt` | SPEC §2.4, ADR-002/004 |
+| W1.C2 | tools: editor | `tools/StrReplaceEditorTool.kt` | SPEC §2.4 |
+| W1.D1 | `ph.prompt` | `prompt/YamlPresetLoader.kt`, `DefaultPromptAssembler.kt` | SPEC §2.5, §3 |
+| W1.D2 | `ph.agent` | `agent/LinearAgentRunner.kt` | SPEC §2.6 |
+| W1.E1 | `ph.ui` | `ui/DefaultThreadProjector.kt` | SPEC §2.7 |
+| W1.E2 | `:app` + platform | `app/**` | ADR-005, ADR-001 |
+
+Merge rule: the orchestrator reads the tree against `SPEC.md`, runs
+`./gradlew :core:test :core:coverageGate :app:assembleDebug :app:lintDebug`, and reproduces the
+on-device evidence personally. Child reports are not evidence.
 
 ## Wave 2 — integration (orchestrator-led)
 
