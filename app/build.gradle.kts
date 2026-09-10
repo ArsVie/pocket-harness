@@ -69,6 +69,10 @@ dependencies {
     // Shell.exec is suspend; the probe runs it with runBlocking off the main thread.
     implementation(libs.kotlinx.coroutines.core)
 
+    // :core declares okhttp as `implementation`, so the client type is not on :app's compile
+    // classpath transitively; the composition root constructs an OkHttpClient per route.
+    implementation(libs.okhttp)
+
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.ui)

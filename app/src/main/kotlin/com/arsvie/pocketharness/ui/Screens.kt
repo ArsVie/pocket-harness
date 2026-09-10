@@ -14,9 +14,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -24,7 +32,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.arsvie.pocketharness.SettingsField
 import ph.policy.ExecutionMode
+import ph.ui.ApprovalPrompt
 import ph.ui.Block
 import ph.ui.OpenThread
 import ph.ui.SettingsState
@@ -96,9 +106,14 @@ fun TabStrip(tabs: List<String>, selected: Int, onSelect: (Int) -> Unit, modifie
 
 /** A settings-style preference row: tall, white, hairline underneath, label left / control right. */
 @Composable
-fun PrefRow(label: String, value: String?, trailing: (@Composable () -> Unit)? = null) {
+fun PrefRow(label: String, value: String?, trailing: (@Composable () -> Unit)? = null, onClick: (() -> Unit)? = null) {
     Row(
-        modifier = Modifier.fillMaxWidth().height(Chrome.RowHeight).background(Chrome.RowBg).padding(horizontal = 12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(Chrome.RowHeight)
+            .background(Chrome.RowBg)
+            .clickable(enabled = onClick != null) { onClick?.invoke() }
+            .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
@@ -209,7 +224,12 @@ private fun BlockBox(label: String, text: String, bg: Color, error: Boolean = fa
 // ---------------------------------------------------------------- settings
 
 @Composable
-fun SettingsScreen(settings: SettingsState, onModeChange: (ExecutionMode) -> Unit) {
+fun SettingsScreen(
+    settings: SettingsState,
+    onModeChange: (ExecutionMode) -> Unit,
+    onEdit: (SettingsField, String) -> Unit,
+) {
+    var editing by remember { mutableStateOf<SettingsField?>(null) }
     Column(modifier = Modifier.fillMaxSize().background(Chrome.Page).verticalScroll(rememberScrollState())) {
         Box(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
             Text(text = "POLICY", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Chrome.Sub)
@@ -228,9 +248,13 @@ fun SettingsScreen(settings: SettingsState, onModeChange: (ExecutionMode) -> Uni
         Box(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
             Text(text = "MODEL", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Chrome.Sub)
         }
-        PrefRow(label = "Base URL", value = settings.baseUrl)
-        PrefRow(label = "Model", value = settings.model)
-        PrefRow(label = "Reasoning effort", value = settings.reasoningEffort ?: "none")
+        PrefRow(label = "Base URL", value = settings.baseUrl, onClick = { editing = SettingsField.BASE_URL })
+        PrefRow(label = "Model", value = settings.model, onClick = { editing = SettingsField.MODEL })
+        PrefRow(
+            label = "Reasoning effort",
+            value = settings.reasoningEffort ?: "none",
+            onClick = { editing = SettingsField.REASONING_EFFORT },
+        )
         PrefRow(
             label = "Reasoning efforts",
             value = settings.reasoningEfforts.joinToString(", "),
@@ -239,11 +263,10 @@ fun SettingsScreen(settings: SettingsState, onModeChange: (ExecutionMode) -> Uni
         Box(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
             Text(text = "CREDENTIALS", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Chrome.Sub)
         }
-        CheckRow(
+        PrefRow(
             label = "API key",
-            subtitle = if (settings.hasApiKey) "stored in the Android Keystore" else "not set — tap to add",
-            checked = settings.hasApiKey,
-            onChange = { },
+            value = if (settings.hasApiKey) "stored in the Android Keystore" else "not set — tap to add",
+            onClick = { editing = SettingsField.API_KEY },
         )
 
         Box(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
@@ -257,6 +280,106 @@ fun SettingsScreen(settings: SettingsState, onModeChange: (ExecutionMode) -> Uni
         )
         Spacer(modifier = Modifier.height(24.dp))
     }
+
+    editing?.let { field ->
+        var draft by remember(field) {
+            mutableStateOf(
+                when (field) {
+                    SettingsField.BASE_URL -> settings.baseUrl
+                    SettingsField.MODEL -> settings.model
+                    SettingsField.REASONING_EFFORT -> settings.reasoningEffort.orEmpty()
+                    SettingsField.API_KEY -> ""
+                },
+            )
+        }
+        AlertDialog(
+            onDismissRequest = { editing = null },
+            title = { Text(text = titleOf(field), fontSize = 15.sp) },
+            text = {
+                Column {
+                    if (field == SettingsField.API_KEY) {
+                        Text(text = "Never logged; stored encrypted in the Android Keystore.", fontSize = 11.sp, color = Chrome.Sub)
+                    }
+                    OutlinedTextField(value = draft, onValueChange = { draft = it }, singleLine = true)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onEdit(field, draft)
+                    editing = null
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { editing = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+private fun titleOf(field: SettingsField): String = when (field) {
+    SettingsField.BASE_URL -> "Base URL"
+    SettingsField.MODEL -> "Model"
+    SettingsField.REASONING_EFFORT -> "Reasoning effort (blank = omit)"
+    SettingsField.API_KEY -> "API key"
+}
+
+// ---------------------------------------------------------------- first-run approval
+
+@Composable
+fun ApprovalDialog(prompt: ApprovalPrompt, onDecide: (Boolean) -> Unit) {
+    AlertDialog(
+        onDismissRequest = { onDecide(false) },
+        title = { Text(text = "Allow command execution in " + prompt.cwd + "?") },
+        text = { Text(text = prompt.command, fontSize = 12.sp) },
+        confirmButton = { TextButton(onClick = { onDecide(true) }) { Text("Allow") } },
+        dismissButton = { TextButton(onClick = { onDecide(false) }) { Text("Deny") } },
+    )
+}
+
+// ---------------------------------------------------------------- composer (Send / Stop)
+
+@Composable
+fun Composer(running: Boolean, onSend: (String) -> Unit, onStop: () -> Unit) {
+    var draft by remember { mutableStateOf("") }
+    Column(modifier = Modifier.fillMaxWidth().background(Chrome.RowBg)) {
+        Hairline()
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text(text = if (running) "steer the running turn…" else "message", fontSize = 13.sp) },
+                singleLine = false,
+                maxLines = 3,
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(onClick = {
+                onSend(draft)
+                draft = ""
+            }) { Text("Send") }
+            Spacer(modifier = Modifier.width(8.dp))
+            TextButton(onClick = onStop, enabled = running) { Text("Stop") }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- new thread
+
+@Composable
+fun NewThreadRow(onNew: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .background(Color(0xFFDDDDDD))
+            .clickable { onNew() }
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text = "+ New thread", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF222222))
+    }
+    Hairline()
 }
 
 @Composable
