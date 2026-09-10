@@ -68,17 +68,22 @@ class LinearAgentRunner(
         repeatCount = 0
         warningEmitted = false
         try {
-            var turn = 0
+            // Turns this *run* has started — what `turnCap` counts. The turn *number* is a property
+            // of the session, not of the run (see [nextTurn]): a second `run()` on the same session
+            // continues 1, 2, … instead of restarting at 1, so the pruner/compaction can group
+            // events by turn without two distinct turns colliding on one id.
+            var turnsThisRun = 0
             while (true) {
                 val turnCap = preset.loop.turnCap
-                if (turnCap != null && turn >= turnCap) {
+                if (turnCap != null && turnsThisRun >= turnCap) {
                     emit(LoopEvent.TurnEnded(TurnEndReason.POLICY_STOP))
                     break
                 }
                 // The first turn is owed to the caller (it is started by collecting this flow);
                 // after that a turn only starts because new input was queued for it.
-                if (turn > 0 && !steeringPending()) break
-                turn += 1
+                if (turnsThisRun > 0 && !steeringPending()) break
+                turnsThisRun += 1
+                val turn = nextTurn(session)
                 emit(LoopEvent.TurnStarted(turn))
                 session.append(SessionEvent.TurnStart(seq = 0, time = 0, turn = turn))
                 val reason = runSteps(turn, preset, session) { emit(it) }
@@ -320,6 +325,14 @@ class LinearAgentRunner(
     }
 
     // ---- small readers ----------------------------------------------------------------------
+
+    /**
+     * The turn number for a turn about to start: one past the highest `TurnStart.turn` already in
+     * the session, or 1 for a fresh session. Derived from the events, so a second `run()` on the
+     * same session continues the numbering rather than restarting it.
+     */
+    private fun nextTurn(session: Session): Int =
+        (session.events.filterIsInstance<SessionEvent.TurnStart>().maxOfOrNull { it.turn } ?: 0) + 1
 
     private fun modeOf(session: Session): ExecutionMode =
         session.events.filterIsInstance<SessionEvent.ModeSelected>().lastOrNull()?.mode

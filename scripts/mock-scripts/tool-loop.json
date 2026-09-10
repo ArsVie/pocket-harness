@@ -1,0 +1,35 @@
+{
+  "description": "End-to-end tool execution proof: two real bash tool calls, then a final answer. The first runs a read-only command and prints a sentinel, the second writes a file into the session workspace so the result can be read back off-device with `run-as`. Start the mock with this script and send one message; a single run consumes all three steps.",
+  "steps": [
+    {
+      "reasoning": "Prove the dispatcher reaches a real shell: print the working directory, list it, and emit a sentinel.",
+      "text": null,
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "pwd && ls -la && echo TOOL_RAN"
+          }
+        }
+      ],
+      "finish_reason": "tool_calls"
+    },
+    {
+      "reasoning": "Prove the command's side effects land on the real filesystem: create a file and read it straight back.",
+      "text": null,
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "mkdir -p proof && echo made > proof/marker.txt && cat proof/marker.txt"
+          }
+        }
+      ],
+      "finish_reason": "tool_calls"
+    },
+    {
+      "text": "Both commands ran; the marker file was written and read back.",
+      "finish_reason": "stop"
+    }
+  ]
+}

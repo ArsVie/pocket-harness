@@ -24,7 +24,10 @@ kotlin {
 dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.core)
-    implementation(libs.okhttp)
+    // okhttp is part of Core's *public* surface: `OpenAiClient`'s constructor takes an OkHttpClient,
+    // and the composition root (`:app`) must construct one to inject. It is therefore `api`, not
+    // `implementation`, so that consumers compile against it without restating the dependency.
+    api(libs.okhttp)
     implementation("org.yaml:snakeyaml:2.7")
 
     testImplementation(kotlin("test"))

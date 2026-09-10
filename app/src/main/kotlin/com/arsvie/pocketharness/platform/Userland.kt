@@ -62,20 +62,41 @@ class AndroidShellBinaries(context: Context) : ShellBinaries {
     var chosen: File = nativeBinary
         private set
 
-    override fun shellPath(): String = chosen.absolutePath
+    private var resolved = false
+    private var resolveLog = ""
+
+    /**
+     * Force resolution before any path is handed out. This exists because a caller *did* forget:
+     * `AppGraph` built one instance and `Userland.provision` resolved a different one, so the shell
+     * kept the unresolved default (`nativeLibraryDir/libbusybox.so` — a file the APK does not ship)
+     * and every command died with ENOENT. Making the accessors resolve means there is no way to hold
+     * an unresolved instance and read a path off it.
+     */
+    private fun ensureResolved() {
+        if (!resolved) resolve()
+    }
+
+    override fun shellPath(): String {
+        ensureResolved()
+        return chosen.absolutePath
+    }
 
     /**
      * PATH: the `rm` shim dir FIRST, then the shell's own applet dir. For the platform shell the
      * applet dir is `/system/bin`; for busybox it is the symlink farm in app data.
      */
-    override fun pathPrefix(): String =
-        shimDir.absolutePath + File.pathSeparator +
+    override fun pathPrefix(): String {
+        ensureResolved()
+        return shimDir.absolutePath + File.pathSeparator +
             if (kind == ShellKind.BUSYBOX) appletDir.absolutePath else "/system/bin"
+    }
 
     /** argv[0] + args for running `command` under the chosen shell. */
-    fun argv(command: String): List<String> =
-        if (kind == ShellKind.BUSYBOX) listOf(chosen.absolutePath, "sh", "-c", command)
+    fun argv(command: String): List<String> {
+        ensureResolved()
+        return if (kind == ShellKind.BUSYBOX) listOf(chosen.absolutePath, "sh", "-c", command)
         else listOf(chosen.absolutePath, "-c", command)
+    }
 
     /**
      * Run the cheap self-test that decides which shell can actually dispatch work in this process:
@@ -83,6 +104,8 @@ class AndroidShellBinaries(context: Context) : ShellBinaries {
      * is explicitly *not* accepted as proof: it prints usage before applet dispatch.
      */
     fun resolve(): String {
+        if (resolved) return resolveLog
+
         fun works(argv: List<String>): Boolean = try {
             val r = Userland.execDirect(argv, env = mapOf("PATH" to "/system/bin"))
             r.exitCode == 0 && r.out.isNotBlank()
@@ -93,16 +116,18 @@ class AndroidShellBinaries(context: Context) : ShellBinaries {
         if (nativeBinary.exists() && works(listOf(nativeBinary.absolutePath, "echo", "selftest"))) {
             kind = ShellKind.BUSYBOX
             chosen = nativeBinary
-            return "shell self-test: nativeLibraryDir/libbusybox.so dispatches applets -> BUSYBOX"
-        }
-        if (systemShell.exists() && works(listOf(systemShell.absolutePath, "-c", "echo selftest"))) {
+            resolveLog = "shell self-test: nativeLibraryDir/libbusybox.so dispatches applets -> BUSYBOX"
+        } else if (systemShell.exists() && works(listOf(systemShell.absolutePath, "-c", "echo selftest"))) {
             kind = ShellKind.PLATFORM
             chosen = systemShell
-            return "shell self-test: native busybox did NOT dispatch, /system/bin/sh works -> PLATFORM"
+            resolveLog = "shell self-test: native busybox did NOT dispatch, /system/bin/sh works -> PLATFORM"
+        } else {
+            kind = ShellKind.BUSYBOX
+            chosen = binary
+            resolveLog = "shell self-test: neither packaged path worked; falling back to asset busybox ${binary.absolutePath}"
         }
-        kind = ShellKind.BUSYBOX
-        chosen = binary
-        return "shell self-test: neither packaged path worked; falling back to asset busybox ${binary.absolutePath}"
+        resolved = true
+        return resolveLog
     }
 }
 

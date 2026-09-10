@@ -44,6 +44,25 @@ Decision recorded verbatim, as given:
    user-editable in Settings. The key itself lives in `EncryptedSharedPreferences`, referenced by
    name, never inlined in a config file or committed.
 
+## Verified against the real endpoint (September 2026)
+
+The first real provider was not the DeepSeek adapter the research describes, but a CommandCode
+endpoint (`https://api.commandcode.ai/provider/v1`, model `deepseek/deepseek-v4.1-flash`). Probed
+before wiring, so the assumptions above could be checked rather than carried:
+
+| Assumption | What the endpoint actually does |
+|---|---|
+| Non-streaming request is accepted | Yes. No `stream` field sent, a single JSON body returned. |
+| `reasoning_effort` is the lever | Yes, and it **validates the value itself**: a bogus level returns `Invalid option: expected one of "low"\|"medium"\|"high"\|"xhigh"\|"max"`. So the advertised list is data, exactly as §3 requires — and the real set is `low/medium/high/xhigh/max`, with `high` chosen as this deployment's default. Our local pre-flight check makes a bad level fail before I/O rather than after a round trip. |
+| Reasoning comes back as `reasoning_content` | **No — it comes back as `reasoning`**, plus a `reasoning_details[]` array we ignore. The client accepts either spelling (§4), which is the only reason no code changed. Recorded because a client written to the single spelling from research 02 would have silently dropped all reasoning text against this provider. |
+| Tool calling works over `tools` | Yes: `finish_reason: "tool_calls"`, `tool_calls[]` with `id`/`function.name`/`function.arguments` as a **raw JSON string**, which the client passes through unmodified. |
+| Reasoning replay on a tool-call turn is accepted | Yes. An assistant message carrying both `reasoning` and `tool_calls`, followed by a `role: tool` result, is accepted and answered correctly. |
+| Prompt caching pays off | Observable: a follow-up request reported `prompt_tokens_details.cached_tokens: 256` of 413 prompt tokens, i.e. the byte-stable prefix is being served from cache. This is the first measurement of Pattern 11 on real traffic in this project. |
+
+Also observed: `usage.completion_tokens_details.reasoning_tokens` is reported separately from
+`completion_tokens`, so reasoning spend is visible per turn if we ever want a cost view. Not consumed
+in v1.
+
 ## Consequences
 
 **Upside.** No SSE parser, no incremental assembler, no partial-message persistence — the whole
