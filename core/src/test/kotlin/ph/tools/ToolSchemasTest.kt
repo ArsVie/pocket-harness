@@ -48,7 +48,7 @@ class ToolSchemasTest {
     fun `bash description is corrected for the device and carries the honesty instruction`() {
         val description = ToolSchemas.BASH_DESCRIPTION
         assertTrue(description.contains("no package manager"), "must not promise apt/pip")
-        assertTrue(description.contains("busybox ash"), "must not claim GNU bash")
+        assertTrue(description.contains("mksh with Android's toybox"), "must name the shell that actually runs")
         assertTrue(description.contains("grep -rn"), "search must be taught here, there is no search tool")
         assertTrue(description.contains("sed -n 10,25p"), "range reading must be taught here")
         assertTrue(description.contains(".trash/"), "trash semantics are model-visible")

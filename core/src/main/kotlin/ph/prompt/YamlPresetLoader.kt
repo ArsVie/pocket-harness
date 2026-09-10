@@ -102,15 +102,15 @@ class YamlPresetLoader {
     }
 
     private fun requiredString(map: Map<*, *>, key: String, source: String): String =
-        requiredValue(map, key, source, source) as? String
+        requiredValue(map, key, "preset", source) as? String
             ?: throw PresetLoadException("preset $source: '$key' must be a string")
 
     private fun requiredBoolean(map: Map<*, *>, key: String, source: String): Boolean =
-        requiredValue(map, key, source, source) as? Boolean
+        requiredValue(map, key, "preset", source) as? Boolean
             ?: throw PresetLoadException("preset $source: '$key' must be a boolean")
 
     private fun requiredStringList(map: Map<*, *>, key: String, source: String): List<String> {
-        val value = requiredValue(map, key, source, source) as? List<*>
+        val value = requiredValue(map, key, "preset", source) as? List<*>
             ?: throw PresetLoadException("preset $source: '$key' must be a list")
         return value.map {
             it as? String ?: throw PresetLoadException("preset $source: '$key' must be a list of strings")

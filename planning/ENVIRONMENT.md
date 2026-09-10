@@ -87,19 +87,36 @@ the binary to `/data/local/tmp` and running it as the **shell** user, whose proc
 It proved ARM translation works; it did not prove the app can use a busybox userland, and it was
 written up too generously. The in-process probe is what settled it.
 
-**Consequences, and what happens next.**
+**Consequences, resolved.** Both candidates were tested in the app process on the API-36 emulator;
+the raw rows are in `files/exec-probe.txt` on the device and reproduced by
+`adb -s emulator-5554 shell run-as com.arsvie.pocketharness cat files/exec-probe.txt`.
 
-1. A static musl busybox cannot be the harness's userland in the app process. Android's own bionic
-   binaries are built against this filter, so `/system/bin/sh` (mksh) and `toybox` are the natural
-   candidate — that keeps the reference `bash` *tool interface* while changing what runs underneath.
-2. A second candidate is packaging the binary as a native library
-   (`jniLibs/arm64-v8a/libbusybox.so`, extracted to `/data/app/.../lib/arm64/`), on the theory that a
-   different mount/domain may carry a different filter profile. Under test; not yet proven either way.
-3. Whichever wins, the `rm` → trash shim must have a shebang the working shell can execute. The shim as
-   first deployed pointed at the busybox that now cannot run.
-4. `targetSdk 28` remains the right pin for ADR-001's exec question, but it is not sufficient on its
-   own, and ADR-001's "two mechanisms, either works" framing is incomplete: the third variable is the
-   app-domain syscall filter.
+| Candidate | Result |
+|---|---|
+| busybox as `jniLibs/arm64-v8a/libbusybox.so`, executed from `/data/app/.../lib/arm64/` | **Dead.** Two independent reasons, both recorded: (a) busybox dispatches its applet from `argv[0]`'s basename, so `libbusybox.so --help` is `exit 127, applet not found` — a naming failure, not a policy one; (b) exec'd through a symlink renamed `busybox`, `--help` returns 0 but `echo` and `sh -c` return **159 (SIGSYS)**, exactly as from app data. The exec *directory* is not the variable: the filter is inherited across `execve` wherever the bytes live. |
+| The platform shell — `/system/bin/sh` (mksh) + toybox | **Works.** `sh -c 'echo OK; grep Seccomp /proc/self/status; id -u'` runs from the app process, and the child reports `Seccomp: 2` — it inherits the filter and still works, because bionic tools are built against it. `toybox echo`, an applet called by name (`/system/bin/echo`), and `/system/bin/grep` all return 0 with real output. A *copy* of `/system/bin/sh` also execs from app data, and a `#!/system/bin/sh` script from app data runs — which is the exact shape of the `rm` shim. |
+
+So: **the harness's userland is Android's own bionic shell and toybox**, selected at runtime by a
+self-test (`AndroidShellBinaries.resolve()`), with the asset busybox retained as a fallback that will
+simply never win on Android. This resolves ADR-001's open gap "which userland ships": not busybox, not
+a Termux bootstrap, but the platform's. The `bash` tool interface is unchanged — it is still a real
+shell over a real filesystem, which is the property ADR-001 actually needed.
+
+Proven end to end in-app (orchestrator-verified, not taken on report): `rm work/doomed.txt` left
+`work/` containing only `keep.txt`, and the file reappeared as
+`files/workspace/.trash/<stamp>-doomed.txt`, with the deployed shim's first line being
+`#!/system/bin/sh`.
+
+Two honest costs of this decision:
+
+1. It is no longer literally "Termux-style". The reference presets' tool *descriptions* assume a
+   Linux userland with GNU tools; toybox and mksh are smaller than busybox's applet set in places,
+   and the `bash` description must not promise what the platform shell lacks. The description is
+   orchestrator-owned and says "busybox ash" nowhere, but it should be re-read against the mksh/toybox
+   reality.
+2. The `rm` shim's applet usage is now constrained by what mksh + toybox provide (`mkdir`, `date`,
+   `basename`, `mv` are toybox; `case`/`[` are mksh builtins). It works today; anything added to it
+   later has to be checked against that set.
 
 
 ## Lint and `targetSdk 28`
