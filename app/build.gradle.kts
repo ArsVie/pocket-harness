@@ -42,6 +42,25 @@ android {
             isMinifyEnabled = false
         }
     }
+
+    packaging {
+        jniLibs {
+            // Only meaningful once something lands in jniLibs/arm64-v8a (the fallback exec path in
+            // ADR-001). Today the userland ships as an asset and is unpacked to files/userland, so
+            // this is currently a no-op — it becomes load-bearing if W0.3's probe proves the asset
+            // path is blocked and the binary has to be packaged as a native library instead.
+            useLegacyPackaging = true
+        }
+    }
+
+    lint {
+        // ExpiredTargetSdkVersion is a Google Play *distribution* policy. Play is explicitly out of
+        // scope for this PoC (ADR-001 "Play distribution is out of scope"; ADR-005 §8): targetSdk 28
+        // is what keeps exec of app-data files legal on Android 10+ (the W^X behaviour change), and
+        // that was verified on the API-36 emulator before this line was written. Every other lint
+        // check stays on and the build stays fatal on them.
+        disable += "ExpiredTargetSdkVersion"
+    }
 }
 
 dependencies {

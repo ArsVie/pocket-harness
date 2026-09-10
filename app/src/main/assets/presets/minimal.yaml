@@ -5,9 +5,15 @@
 id: minimal
 
 # `persona` is the entire system message (complete: true means nothing may append to it).
-persona: >-
-  You are a coding agent running on an Android device: read files before editing them, use the
-  shell to build and test your work, and report failures honestly instead of guessing.
+#
+# One sentence, on purpose. This is the reference `minimal` preset's system prompt verbatim
+# (research 02 §3.1), and the finding it encodes is that the prompt is not where capability lives —
+# the tool descriptions are (research 00 §2b, research 02 §10.2). Everything this harness needs to
+# teach the model (no apt/pip on a phone, search with grep, read ranges with sed, verify before
+# claiming, report failures honestly) belongs in the `bash` tool description, which co-varies with
+# the toolset, not here. If this field ever needs to grow, that is a signal the tools are
+# under-described.
+persona: You are a helpful software engineer assistant.
 
 complete: true
 includeRuntimeContext: false
