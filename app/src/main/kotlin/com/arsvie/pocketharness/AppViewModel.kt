@@ -175,14 +175,6 @@ class AppViewModel(context: Context) {
         }
     }
 
-    /** ADR-005 §6: re-openable from Settings; the dialog itself lives in `ui/Screens.kt`. */
-    fun openBatterySettings() {
-        val intent = android.content.Intent(
-            android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-        ).setData(android.net.Uri.parse("package:" + app.packageName))
-        runCatching { app.startActivity(intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
-    }
-
     // ---- the turn ------------------------------------------------------------------------------
 
     private fun startTurn() {
@@ -191,6 +183,8 @@ class AppViewModel(context: Context) {
         runJob = scope.launch {
             live.clear()
             running = true
+            // ADR-005 §5: foreground for the whole turn, so Home / screen-off cannot freeze us.
+            TurnService.start(app)
             publish()
             try {
                 graph.runner.run(current, graph.preset).collect { event ->
@@ -202,6 +196,8 @@ class AppViewModel(context: Context) {
                 appendFailure(current, t)
             } finally {
                 running = false
+                // One active turn at a time: the service lives exactly as long as the turn does.
+                TurnService.stop(app)
                 reconcileSteering()
                 refreshThreads()
                 publish()
@@ -298,7 +294,6 @@ class AppViewModel(context: Context) {
             reasoningEffort = graph.settings.reasoningEffort,
             reasoningEfforts = AppGraph.REASONING_EFFORTS,
             hasApiKey = graph.hasApiKey(),
-            batteryDisclaimerAcknowledged = false,
         )
         ui = UiState(threads = threads, open = withQueued, settings = settingsRow)
     }

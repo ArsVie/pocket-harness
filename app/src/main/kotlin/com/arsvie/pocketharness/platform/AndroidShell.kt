@@ -34,12 +34,23 @@ class AndroidShell(private val binaries: AndroidShellBinaries) : Shell {
         timeoutMs: Long,
         env: Map<String, String>,
     ): ExecResult = withContext(Dispatchers.IO) {
+        // The child's env is derived from the cwd argument, never from a literal path: HOME is the
+        // working directory (a live transcript showed `echo HOME=$HOME` printing an empty value and
+        // `ls "$HOME"` dying with `ls: : No such file or directory`), and TMPDIR is a `.tmp`
+        // subdirectory of it, created here so tools that write temp files have somewhere legal.
+        val home = File(cwd).absoluteFile
+        val tmp = File(home, TMP_DIR_NAME).apply { mkdirs() }
+
         // argv is `<shell> sh -c <command>` for busybox, `<shell> -c <command>` for the platform
         // shell; [AndroidShellBinaries.argv] owns that difference.
         val process = ProcessBuilder(binaries.argv(command))
-            .directory(File(cwd))
+            .directory(home)
             .apply {
                 environment()["PATH"] = binaries.pathPrefix()
+                environment()["HOME"] = home.absolutePath
+                environment()["TMPDIR"] = tmp.absolutePath
+                // Caller-supplied vars are exported verbatim and may override the above (the tool
+                // layer passes PH_TRASH_DIR); PATH stays as [pathPrefix] unless the caller sets it.
                 env.forEach { (k, v) -> environment()[k] = v }
             }
             .start()
@@ -70,5 +81,10 @@ class AndroidShell(private val binaries: AndroidShellBinaries) : Shell {
             exitCode = process.exitValue(),
             timedOut = timedOut,
         )
+    }
+
+    private companion object {
+        /** Subdirectory of the working directory handed to the child as TMPDIR (a name, not a path). */
+        const val TMP_DIR_NAME = ".tmp"
     }
 }

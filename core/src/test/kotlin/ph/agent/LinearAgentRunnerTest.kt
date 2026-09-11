@@ -77,6 +77,30 @@ class LinearAgentRunnerTest {
     ) = LinearAgentRunner(models, prompts, tools, FakeClock())
 
     @Test
+    fun `successive runs on one session continue the turn number`() = runTest {
+        val models = FakeModelClient(listOf(FakeAnswers.text("first"), FakeAnswers.text("second")))
+        val runner = runner(models)
+        val session = newSession()
+
+        // Run 1: the session is empty, so this is turn 1.
+        runner.run(session, preset()).toList()
+        assertEquals(1, (session.events.first { it is SessionEvent.TurnStart } as SessionEvent.TurnStart).turn)
+
+        // Run 2: the same session already carries a turn, so the next one is turn 2 — not 1 again.
+        session.append(SessionEvent.UserMessage(seq = 0, time = 0, text = "again", queuedDuringTurn = null))
+        runner.run(session, preset()).toList()
+
+        assertEquals(
+            listOf(1, 2),
+            session.events.filterIsInstance<SessionEvent.TurnStart>().map { it.turn },
+        )
+        assertEquals(
+            listOf(1, 2),
+            session.events.filterIsInstance<SessionEvent.TurnEnd>().map { it.turn },
+        )
+    }
+
+    @Test
     fun `two-step tool loop logs every step before it is used`() = runTest {
         val models = FakeModelClient(
             listOf(

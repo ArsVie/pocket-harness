@@ -269,15 +269,6 @@ fun SettingsScreen(
             onClick = { editing = SettingsField.API_KEY },
         )
 
-        Box(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-            Text(text = "BATTERY", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Chrome.Sub)
-        }
-        CheckRow(
-            label = "Battery optimisation disclaimer",
-            subtitle = if (settings.batteryDisclaimerAcknowledged) "acknowledged" else "not acknowledged",
-            checked = settings.batteryDisclaimerAcknowledged,
-            onChange = { },
-        )
         Spacer(modifier = Modifier.height(24.dp))
     }
 

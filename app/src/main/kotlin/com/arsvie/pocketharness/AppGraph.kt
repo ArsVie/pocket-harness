@@ -158,7 +158,10 @@ class AppGraph(private val context: Context) {
             ToolSchemas.STR_REPLACE_EDITOR.name to StrReplaceEditorTool(loaded.budgets),
         )
         val dispatcher = DefaultToolDispatcher(tools, DefaultPolicyFloor(), trustStore, loaded.budgets)
-        val client = OpenAiClient(route, secrets, clock, OkHttpClient(), loaded.loop)
+        val http = OkHttpClient.Builder()
+            .apply { if (BuildConfig.DEBUG) addInterceptor(DebugWireLogger()) } // DEBUG-ONLY
+            .build()
+        val client = OpenAiClient(route, secrets, clock, http, loaded.loop)
 
         preset = loaded
         runner = LinearAgentRunner(client, DefaultPromptAssembler(), dispatcher, clock)
@@ -182,8 +185,15 @@ class AppGraph(private val context: Context) {
         const val PRESET_ID = "minimal"
         const val PRESET_ASSET = "presets/minimal.yaml"
 
-        /** ADR-003 §3: the advertised level list is data. The mock advertises the same three. */
-        val REASONING_EFFORTS = listOf("low", "medium", "high")
+        /** ADR-003 §3: the advertised level list is data. The real provider advertises five. */
+        @Volatile
+        var REASONING_EFFORTS = listOf("low", "medium", "high", "xhigh", "max")
+            private set
+
+        /** DEBUG-ONLY: lets [DebugEnvBootstrap] seed the advertised list from `debug-env.json`. */
+        fun setReasoningEfforts(levels: List<String>) {
+            if (levels.isNotEmpty()) REASONING_EFFORTS = levels
+        }
 
         private const val PRESET_FILE_NAME = "minimal.yaml"
         private const val WORKSPACE_DIR_NAME = "workspace"

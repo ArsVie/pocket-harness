@@ -3,6 +3,13 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- ADR-005 §5: the foreground service that owns the active turn. POST_NOTIFICATIONS is declared
+         for API 33+ devices even though targetSdk 28 means it is granted at install; the notification
+         itself is posted by the service, never by the activity. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- extractNativeLibs=true (equivalent): declared in build.gradle.kts as
          packaging.jniLibs.useLegacyPackaging = true, because AGP 9 rejects the manifest attribute
          outright (issue #149770867). The shipped userland (static aarch64 busybox) must be
@@ -24,6 +31,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- ADR-005 §5: owns the active turn so it survives backgrounding. Not exported, not bound;
+             it exists only to hold the process foreground-important while a turn runs. -->
+        <service
+            android:name=".TurnService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>

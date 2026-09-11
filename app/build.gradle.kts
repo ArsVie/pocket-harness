@@ -35,6 +35,9 @@ android {
 
     buildFeatures {
         compose = true
+        // Required for BuildConfig.DEBUG, which gates the debug-only env bootstrap. AGP 8+ defaults
+        // this off, so it must be explicit.
+        buildConfig = true
     }
 
     buildTypes {

@@ -71,7 +71,6 @@ object Fixtures {
             reasoningEffort = "medium",
             reasoningEfforts = listOf("low", "medium", "high"),
             hasApiKey = false,
-            batteryDisclaimerAcknowledged = false,
         ),
     )
 }

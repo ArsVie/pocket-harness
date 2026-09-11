@@ -54,7 +54,6 @@ data class SettingsState(
     val reasoningEffort: String?,
     val reasoningEfforts: List<String>,
     val hasApiKey: Boolean,
-    val batteryDisclaimerAcknowledged: Boolean,
 )
 
 data class UiState(

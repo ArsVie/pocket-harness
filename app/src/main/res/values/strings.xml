@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">PocketHarness</string>
+
+    <!-- Foreground-service notification (ADR-005 §5). Label + fixed copy only: no session id, no
+         command, no model output. -->
+    <string name="turn_channel_id">ph_turn</string>
+    <string name="turn_channel_name">Active turn</string>
+    <string name="turn_channel_description">Shown while a harness turn is running, so it survives backgrounding.</string>
+    <string name="turn_notification_title">PocketHarness</string>
+    <string name="turn_notification_text">Turn running</string>
 </resources>

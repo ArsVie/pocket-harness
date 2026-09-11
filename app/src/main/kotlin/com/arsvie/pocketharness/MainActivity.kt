@@ -37,6 +37,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // DEBUG-ONLY test scaffolding: seed the route + key from filesDir/debug-env.json before the
+        // graph is built. Gated on BuildConfig.DEBUG; a no-op in release (see DebugEnvBootstrap).
+        DebugEnvBootstrap.apply(applicationContext)
+
         Thread {
             try {
                 ExecProbe.run(applicationContext)
