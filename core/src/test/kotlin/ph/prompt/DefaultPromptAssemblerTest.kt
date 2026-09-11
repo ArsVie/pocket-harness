@@ -127,13 +127,18 @@ class DefaultPromptAssemblerTest {
             .history
             .filter { it.role == Role.ASSISTANT }
 
-        assertEquals(3, assistants.size)
+        // A tool-call turn goes back as ONE assistant message carrying its text, its calls and its
+        // reasoning together. That is not a stylistic choice: the provider rejects a replayed
+        // `tool_calls` message whose reasoning is missing ("The `reasoning_content` in the thinking
+        // mode must be passed back to the API"), so the reasoning must ride on this exact message.
+        assertEquals(2, assistants.size)
         assertEquals("let me look", assistants[0].text)
         assertEquals("because reasons", assistants[0].reasoning)
-        assertEquals("c1", assistants[1].toolCalls.single().id)
+        assertEquals("c1", assistants[0].toolCalls.single().id)
+        // A plain assistant turn still does NOT replay its reasoning.
+        assertEquals("done", assistants[1].text)
         assertNull(assistants[1].reasoning)
-        assertEquals("done", assistants[2].text)
-        assertNull(assistants[2].reasoning)
+        assertTrue(assistants[1].toolCalls.isEmpty())
     }
 
     @Test

@@ -62,9 +62,53 @@ class DefaultPromptAssembler(
 
     private fun project(history: List<SessionEvent>): MutableList<Piece> {
         val turnsWithToolCalls = history.filterIsInstance<SessionEvent.ToolCall>().map { it.turn }.toSet()
+
+        // A turn that produced tool calls must go back to the provider as ONE assistant message
+        // carrying both its text and all of its tool calls — and, critically, its reasoning. The
+        // provider rejects a replayed `tool_calls` message whose `reasoning_content` is missing
+        // ("The `reasoning_content` in the thinking mode must be passed back to the API", verified
+        // against the live endpoint), and an empty string does not satisfy it either. The reasoning
+        // is therefore read from that turn's logged assistant message; a transcript written before
+        // this rule existed has no reasoning to read and cannot be replayed (start a new thread).
+        val reasoningByTurn = mutableMapOf<Int, String?>()
+        val textByTurn = mutableMapOf<Int, String>()
+        val callsByTurn = mutableMapOf<Int, MutableList<ToolCallRequest>>()
+        for (event in history) {
+            when (event) {
+                is SessionEvent.AssistantMessage -> {
+                    reasoningByTurn[event.turn] = event.reasoning
+                    textByTurn[event.turn] = event.text
+                }
+                is SessionEvent.ToolCall -> callsByTurn.getOrPut(event.turn) { mutableListOf() } +=
+                    ToolCallRequest(
+                        id = event.callId,
+                        name = event.name,
+                        argumentsJson = event.argumentsJson,
+                    )
+                else -> Unit
+            }
+        }
+
         val pieces = mutableListOf<Piece>()
         var currentTurn = -1
         var hasContent = false
+        var emittedCallTurn = mutableSetOf<Int>()
+
+        fun emitToolCallTurn(turn: Int, seq: Int) {
+            if (!emittedCallTurn.add(turn)) return
+            val calls = callsByTurn[turn].orEmpty()
+            pieces += Piece(
+                seq,
+                currentTurn,
+                ChatMessage(
+                    role = Role.ASSISTANT,
+                    text = textByTurn[turn]?.takeIf { it.isNotEmpty() },
+                    toolCalls = calls,
+                    reasoning = reasoningByTurn[turn],
+                ),
+            )
+        }
+
         for (event in history) {
             when (event) {
                 is SessionEvent.TurnStart -> if (hasContent) { currentTurn++; hasContent = false }
@@ -76,27 +120,21 @@ class DefaultPromptAssembler(
                 }
                 is SessionEvent.AssistantMessage -> {
                     if (currentTurn < 0) currentTurn = 0
-                    // Reasoning is replayed only when the same turn also produced a tool call.
-                    val reasoning = if (event.turn in turnsWithToolCalls) event.reasoning else null
-                    pieces += Piece(
-                        event.seq,
-                        currentTurn,
-                        ChatMessage(role = Role.ASSISTANT, text = event.text, reasoning = reasoning),
-                    )
-                    hasContent = true
+                    // A tool-call turn is emitted once, at its first ToolCall event, with its
+                    // reasoning attached; emitting it here as well would duplicate the turn.
+                    if (event.turn !in turnsWithToolCalls) {
+                        // Reasoning is replayed only when the same turn also produced a tool call.
+                        pieces += Piece(
+                            event.seq,
+                            currentTurn,
+                            ChatMessage(role = Role.ASSISTANT, text = event.text),
+                        )
+                        hasContent = true
+                    }
                 }
                 is SessionEvent.ToolCall -> {
                     if (currentTurn < 0) currentTurn = 0
-                    val call = ToolCallRequest(
-                        id = event.callId,
-                        name = event.name,
-                        argumentsJson = event.argumentsJson,
-                    )
-                    pieces += Piece(
-                        event.seq,
-                        currentTurn,
-                        ChatMessage(role = Role.ASSISTANT, toolCalls = listOf(call)),
-                    )
+                    emitToolCallTurn(event.turn, event.seq)
                     hasContent = true
                 }
                 is SessionEvent.ToolResult -> {

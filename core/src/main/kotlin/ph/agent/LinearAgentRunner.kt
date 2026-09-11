@@ -167,6 +167,19 @@ class LinearAgentRunner(
                     val hasContent = response.text.isNotEmpty() || response.reasoning != null
                     askedForTools = response.toolCalls.isNotEmpty()
                     if (askedForTools) {
+                        // The assistant turn is logged BEFORE its calls, carrying its reasoning: the
+                        // provider requires the reasoning of a tool-call turn to be sent back with it
+                        // (verified — omitting it is a 400), so it cannot be dropped at log time. This
+                        // also keeps the "model-visible iff logged" rule true for what we replay.
+                        session.append(
+                            SessionEvent.AssistantMessage(
+                                seq = 0,
+                                time = 0,
+                                turn = turn,
+                                text = response.text,
+                                reasoning = response.reasoning,
+                            ),
+                        )
                         for (call in response.toolCalls) {
                             session.append(
                                 SessionEvent.ToolCall(

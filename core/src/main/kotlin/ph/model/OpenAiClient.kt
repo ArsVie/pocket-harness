@@ -118,13 +118,44 @@ class OpenAiClient(
                     ModelError(ModelErrorCode.SERVER_ERROR, "server error (${res.code})", true, res.code),
                 )
                 else -> ModelOutcome.Failure(
-                    ModelError(ModelErrorCode.MALFORMED_RESPONSE, "unexpected status (${res.code})", false, res.code),
+                    ModelError(
+                        ModelErrorCode.MALFORMED_RESPONSE,
+                        "unexpected status (${res.code})${providerDetail(text)}",
+                        false,
+                        res.code,
+                    ),
                 )
             }
         }
     }
 
     private fun endpoint(): String = route.baseUrl.trimEnd('/') + "/chat/completions"
+
+    /**
+     * The provider's own explanation of a rejected request, appended to the error the model and the
+     * user see. Without this a 400 reads only as "unexpected status (400)", which is what made a
+     * real rejection ("The `reasoning_content` in the thinking mode must be passed back to the API")
+     * invisible in the app until it was reproduced by hand with curl. Providers commonly nest the
+     * useful text one level down, as a JSON string inside `error.message`.
+     */
+    private fun providerDetail(body: String): String {
+        if (body.isBlank()) return ""
+        val shown = try {
+            val root = json.parseToJsonElement(body).jsonObject
+            val message = (root["error"] as? JsonObject)?.let { stringOrNull(it, "message") }
+                ?: stringOrNull(root, "message")
+                ?: body
+            try {
+                val inner = json.parseToJsonElement(message).jsonObject
+                (inner["error"] as? JsonObject)?.let { stringOrNull(it, "message") } ?: message
+            } catch (e: Exception) {
+                message
+            }
+        } catch (e: Exception) {
+            body
+        }
+        return ": " + shown.take(MAX_ERROR_DETAIL_CHARS)
+    }
 
     private fun backoffFor(attempt: Int): Long =
         config.retryBackoffMs.getOrElse(attempt) { config.retryBackoffMs.lastOrNull() ?: 0L }
@@ -230,5 +261,8 @@ class OpenAiClient(
         const val HTTP_TOO_MANY_REQUESTS = 429
         const val HTTP_SERVER_ERROR_MIN = 500
         const val HTTP_SERVER_ERROR_MAX = 599
+
+        /** How much of a provider's error body to surface. Presentation only — not a budget. */
+        const val MAX_ERROR_DETAIL_CHARS = 400
     }
 }

@@ -104,7 +104,7 @@ class LinearAgentRunnerTest {
     fun `two-step tool loop logs every step before it is used`() = runTest {
         val models = FakeModelClient(
             listOf(
-                FakeAnswers.toolCall("c1", "bash", """{"command":"ls -la"}"""),
+                FakeAnswers.toolCall("c1", "bash", """{"command":"ls -la"}""", reasoning = "must list the dir"),
                 FakeAnswers.text("done", "because"),
             ),
         )
@@ -115,37 +115,49 @@ class LinearAgentRunnerTest {
 
         val events = runner.run(session, preset()).toList()
 
+        // The assistant turn is logged BEFORE its call, carrying its reasoning: the provider requires
+        // that reasoning to be sent back with the tool call, so it cannot be dropped at log time.
         assertEquals(
-            listOf("TurnStart", "StepStart", "ToolCall", "ToolResult", "StepStart", "AssistantMessage", "TurnEnd"),
+            listOf(
+                "TurnStart", "StepStart", "AssistantMessage", "ToolCall", "ToolResult",
+                "StepStart", "AssistantMessage", "TurnEnd",
+            ),
             kinds(session),
         )
         val turnStart = session.events[0] as SessionEvent.TurnStart
         assertEquals(1, turnStart.turn)
         assertEquals(0, turnStart.seq)
         assertEquals(1, (session.events[1] as SessionEvent.StepStart).step)
-        val loggedCall = session.events[2] as SessionEvent.ToolCall
+        val callTurn = session.events[2] as SessionEvent.AssistantMessage
+        assertEquals(1, callTurn.turn)
+        assertEquals("must list the dir", callTurn.reasoning)
+        val loggedCall = session.events[3] as SessionEvent.ToolCall
         assertEquals("c1", loggedCall.callId)
         assertEquals("bash", loggedCall.name)
         assertEquals("""{"command":"ls -la"}""", loggedCall.argumentsJson)
-        val loggedResult = session.events[3] as SessionEvent.ToolResult
+        val loggedResult = session.events[4] as SessionEvent.ToolResult
         assertEquals("c1", loggedResult.callId)
         assertFalse(loggedResult.isError)
         assertEquals("ran bash", loggedResult.text)
-        assertEquals(2, (session.events[4] as SessionEvent.StepStart).step)
-        val assistant = session.events[5] as SessionEvent.AssistantMessage
+        assertEquals(2, (session.events[5] as SessionEvent.StepStart).step)
+        val assistant = session.events[6] as SessionEvent.AssistantMessage
         assertEquals("done", assistant.text)
         assertEquals("because", assistant.reasoning)
-        assertEquals(TurnEndReason.COMPLETED, (session.events[6] as SessionEvent.TurnEnd).reason)
+        assertEquals(TurnEndReason.COMPLETED, (session.events[7] as SessionEvent.TurnEnd).reason)
 
         assertEquals(
-            listOf("TurnStarted", "ToolStarted", "ToolFinished", "AssistantText", "TurnEnded"),
+            listOf(
+                "TurnStarted", "AssistantText", "ToolStarted", "ToolFinished", "AssistantText", "TurnEnded",
+            ),
             loopKinds(events),
         )
         assertEquals(LoopEvent.TurnStarted(1), events[0])
-        assertEquals(LoopEvent.ToolStarted("c1", "bash", "ls -la"), events[1])
-        assertEquals(LoopEvent.ToolFinished("c1", ToolOutcome.Ok("ran bash")), events[2])
-        assertEquals(LoopEvent.AssistantText("done", "because"), events[3])
-        assertEquals(LoopEvent.TurnEnded(TurnEndReason.COMPLETED), events[4])
+        // The tool-call turn carries reasoning, so it is surfaced before its calls run.
+        assertEquals(LoopEvent.AssistantText("", "must list the dir"), events[1])
+        assertEquals(LoopEvent.ToolStarted("c1", "bash", "ls -la"), events[2])
+        assertEquals(LoopEvent.ToolFinished("c1", ToolOutcome.Ok("ran bash")), events[3])
+        assertEquals(LoopEvent.AssistantText("done", "because"), events[4])
+        assertEquals(LoopEvent.TurnEnded(TurnEndReason.COMPLETED), events[5])
 
         // The request the loop actually built, and what the dispatcher was told.
         assertEquals("test-model", models.requests.first().model)
@@ -171,19 +183,20 @@ class LinearAgentRunnerTest {
 
         assertEquals(
             listOf(
-                "TurnStart", "StepStart", "ToolCall", "ToolResult", // step 1: no steering yet
+                "TurnStart", "StepStart", "AssistantMessage", "ToolCall", "ToolResult", // step 1: no steering yet
                 "UserMessage", "StepStart", "AssistantMessage", "TurnEnd", // step 2: steering consumed
             ),
             kinds(session),
         )
-        val queued = session.events[4] as SessionEvent.UserMessage
+        val queued = session.events[5] as SessionEvent.UserMessage
         assertEquals("please also run the tests", queued.text)
         assertEquals(1, queued.queuedDuringTurn)
         // The first model call could not see it; the second saw it and nothing else.
         assertEquals(listOf(emptyList<String>(), listOf("please also run the tests")), prompts.steered)
-        // Step 1 assembled before the queued text existed; step 2 assembled after it was logged.
+        // Step 1 assembled before the queued text existed (TurnStart, StepStart); step 2 assembled
+        // after it was logged, by which point the tool-call turn had also been recorded.
         assertEquals(2, prompts.eventCounts[0])
-        assertEquals(6, prompts.eventCounts[1])
+        assertEquals(7, prompts.eventCounts[1])
     }
 
     @Test
