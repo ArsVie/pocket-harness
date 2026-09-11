@@ -57,43 +57,68 @@ on-device evidence personally. Child reports are not evidence.
 
 ## Wave 2 — integration (orchestrator-led)
 
-- Wire `:app` to `:core` end to end; delete the placeholder paths W0.1 created.
-- Live path: a local OpenAI-compatible mock server reachable from the emulator, so the full loop
-  (prompt → tools → transcript → threads UI) is exercised without spending real tokens.
-- On-device: real shell execution through the shipped userland, `str_replace_editor` on a real
-  workspace, trust prompt in DEFAULT, the same command in YOLO, floor denial, `rm` landing in `.trash/`.
-- Persistence: kill and reopen the app mid-session; transcript and mode survive; a kill mid-turn
-  closes with `INTERRUPTED`.
-- Backgrounding: turn continues with the app backgrounded while the foreground service runs.
+Status: **substantially done and verified on device.**
 
-### Wave 2 reachability — expected to be the awkward part
+| Item | State |
+|---|---|
+| `:app` wired to `:core` (real thread list, projector-driven thread view, Send/Stop/steer, settings→route, approval dialog) | **done** — `AppGraph`, `AppViewModel`, `AndroidSecretStore` (real Keystore AES-GCM), `FileTrustStore` |
+| Full loop against a **real** provider | **done** — `deepseek/deepseek-v4.1-flash` via `https://api.commandcode.ai/provider/v1`, model id echoed, `AndroidRuntime:E` empty |
+| Real tool execution on device | **done** — `tool_result isError:false` with real command output; `proof/marker.txt` created and read back as `real` |
+| Trust gate in DEFAULT, approval, resume | **done** — denial → `approval_decided granted=true` → the same command then executes |
+| Wire contract on real traffic | **done** — mock conformance checker reports `{"violations": []}`; provider itself reports cache hits (256/413 prompt tokens) |
+| `bash` userland | **changed by evidence** — the platform shell (mksh + toybox), not busybox; see `ENVIRONMENT.md` |
+| Foreground service + battery disclaimer | **in progress** |
+| Real-endpoint turn: first-run seeding | debug-only bootstrap (`DebugEnvBootstrap`, gated on `BuildConfig.DEBUG`); must be removed before release |
 
-The mock endpoint runs in WSL; the app runs in an emulator that **lives on the Windows host**, and
-`adb` itself talks to the Windows adb server. That is three different hosts in the path, so "just use
-localhost" is wrong and the options need testing in order:
+Reachability, settled by experiment rather than assumption:
 
-| Attempt | Address the app uses | Why it might work / fail |
-|---|---|---|
-| 1 | `http://10.0.2.2:8111` | The emulator's alias for *its* host — which is Windows. Only works if the mock is reachable there, i.e. if WSL's port is forwarded or the mock is moved to Windows. Expect to fail unless mirrored networking exposes it. |
-| 2 | `http://127.0.0.1:8111` + `adb reverse tcp:8111 tcp:8111` | `adb reverse` tunnels to the machine running the **adb server** (Windows), not to WSL. Verify where it terminates before trusting it — this is the most likely trap. |
-| 3 | `http://<WSL eth IP>:8111` | WSL is on `10.8.33.x`/`10.8.35.x`; the emulator may reach it directly over the Windows network stack. Bind the mock to `0.0.0.0` (it already defaults to that) and try this when 1 and 2 fail. |
-| 4 | Move the mock to Windows | Fallback that definitely works: run `scripts/mock-openai.py` under Windows Python and use `10.0.2.2`. Keeps the same script and the same conformance checker. |
+| Attempt | Result |
+|---|---|
+| `http://10.0.2.2:8111` from the emulator, mock bound in WSL | **works** — WSL2 mirrored networking makes the emulator's host alias reach the WSL listener |
+| `adb reverse tcp:9111 tcp:8111` | fails — the reverse tunnel terminates at the machine running the adb **server** (Windows), so it never reaches the WSL mock. Verified: `--list` shows the rule, the device gets accept-then-EOF, and the mock's `served` counter does not move. |
+| `http://<wsl-lan-address>:8111` (each of the WSL eth addresses) | fail — the emulator's NAT cannot route to WSL's LAN addresses |
 
-Test the address with a plain HTTP GET from inside the app (or from `adb shell` with `toybox wget`/curl
-if present) before wiring the UI to it, and record which one won in `ENVIRONMENT.md`.
+The mock endpoint also *checks conformance* of every request against SPEC §2.2 (top-level field order,
+forbidden vendor fields, persona-first, `tool_call_id` presence, the reasoning-replay rule) and exposes
+the result at `/_violations` — a real provider will not tell you that you sent a field you should not
+have.
 
-Second integration question to settle at the same time: the loop needs a `cwd` (workspace) per
-session. Working assumption is `filesDir/workspace/<session-id>/`, created on first use, with the
-`.trash/` and spill directories inside it. Confirm the tools' expectations match (`BashTool` derives
-its spill directory from `ctx.cwd`; `OutputClipper` writes to the path it is given).
+### Workspace layout (settled, implemented)
+
+The loop needs a `cwd` per session, and it is `filesDir/workspace/<session-id>/`, created on first use,
+with `.trash/` and the spill directory inside it. Confirmed against the tools: `BashTool` derives its
+spill directory from `ctx.cwd`, `AndroidTrashPolicy` derives the trash directory from the same cwd, and
+the `rm` shim receives it as `PH_TRASH_DIR`. Live transcripts show commands resolving relative paths
+inside that workspace.
+
 
 ## Wave 3 — hardening and handoff
 
-- Coverage audit: 100% line coverage on `:core`, dead/redundant code review, no `any`/`unknown`
-  equivalents (Kotlin: no `Any`-typed parameters, no unchecked casts), complexity budgets.
-- Real-endpoint smoke on the owner's phone (wireless adb) once it is on the same network as the build machine.
-- Docs: `README.md` for the app, ADR status updates, `planning/README.md` status, this file updated
-  to reflect what actually shipped.
+- [ ] Foreground service + battery-optimization disclaimer (in progress).
+- [ ] Remove test scaffolding: `Fixtures.kt` is dead code once the screens read real state; `ExecProbe`
+      writes `files/exec-probe.txt` on every launch and should be gated behind a trigger file (it is
+      the reproduction for the seccomp finding, so keep the code, stop running it unconditionally);
+      `DebugEnvBootstrap`/`DebugWireLogger` are `BuildConfig.DEBUG`-gated and must not survive into a
+      release build.
+- [ ] Complexity / dead-code / mutation audit over `:core`.
+- [ ] Real-endpoint smoke on the owner's physical phone over wireless adb. If the device cannot be
+      reached, the fallback is to build the APK and install it manually — the app needs no adb at
+      runtime, but a fresh install has **no API key**: it must be typed into Settings once (the
+      debug bootstrap's `files/debug-env.json` path needs adb, so it is not available on a phone
+      without adb).
+- [ ] `:core` seams that should be promoted rather than duplicated in the app: `SessionStore.create`
+      generates its own id (the app builds `JsonlSessionLog` directly to key a workspace on it), and
+      `TrashPolicy` ships in `:core` only as a test fake, so the app has its own.
+
+### Publish state
+
+Published by the `ArsVie` account. The history was rewritten before the first push, so every commit
+is authored and committed by `ArsVie`, and no pre-push object is reachable from the published refs.
+`LICENSE` is MIT under the holder `ArsVie`. `userland/` carries a GPL-2.0-only busybox — see the
+licence section of the README.
+
+`python3 scripts/check-secrets.py` scans the build artefact *and* every blob in git history for key
+material; run it before any push and again after any history rewrite. It reports OK.
 
 ## Risk register
 

@@ -25,6 +25,8 @@ object ToolSchemas {
     val BASH_DESCRIPTION: String = listOf(
         "Run commands in a bash shell",
         "* State is persistent across command calls and discussions with the user.",
+        "* Commands run in this session's working directory, and relative paths resolve there. Run " +
+            "'pwd' to confirm where you are.",
         "* You don't have access to the internet via this tool, and there is no package manager: " +
             "apt, pip, npm and similar are not available. Use what the shell already provides.",
         "* The shell is mksh with Android's toybox utilities — not GNU bash and not busybox. Prefer " +
