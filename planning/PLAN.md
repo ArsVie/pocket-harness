@@ -94,7 +94,8 @@ inside that workspace.
 
 ## Wave 3 — hardening and handoff
 
-- [ ] Foreground service + battery-optimization disclaimer (in progress).
+- [ ] Foreground service (in progress). The battery-optimization disclaimer was cut mid-build
+      (ADR-005 §6) — the service is what keeps a turn alive, not the exemption.
 - [ ] Remove test scaffolding: `Fixtures.kt` is dead code once the screens read real state; `ExecProbe`
       writes `files/exec-probe.txt` on every launch and should be gated behind a trigger file (it is
       the reproduction for the seccomp finding, so keep the code, stop running it unconditionally);

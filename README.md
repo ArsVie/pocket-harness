@@ -124,7 +124,9 @@ before publishing anything.
 ## What does not, yet
 
 - **A turn does not reliably survive backgrounding** — the foreground-service work is the open item.
-  The first-run screen says plainly that Android must be exempted from battery optimization.
+  That service, with its persistent notification, is what keeps a turn alive: a battery-optimization
+  exemption was considered and deliberately cut, because it matters chiefly for work with no
+  foreground presence, which this app does not attempt (ADR-005 §6).
 - **No token streaming** by design (ADR-003): a turn appears when it completes, with a status line
   while it runs.
 - Deferred on purpose, not pending: multi-agent, MCP, skills, plan mode, todo tools, code RAG/embeddings,

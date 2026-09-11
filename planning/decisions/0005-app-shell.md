@@ -40,10 +40,19 @@ Decision recorded verbatim, as given:
    active turn; exactly one active turn at a time. If the service is still killed despite that, the
    turn ends as `interrupted` on resume (synthetic turn end; the transcript is never truncated
    mid-turn).
-6. **A first-run disclaimer** states plainly that the app must be exempted from battery
+6. ~~**A first-run disclaimer** states plainly that the app must be exempted from battery
    optimization to keep running in the background, with a button that opens the system's
-   battery-optimization settings page for this app. It is shown once and re-openable from Settings;
-   it is a disclaimer, not a blocking permission gate.
+   battery-optimization settings page for this app.~~ **Cut on 2026-09-10, mid-build, by Ars:**
+
+   > I don't think the batter disclaimer is necessary. Cut it from requirements if it's not done yet
+
+   Not implemented at the time of the cut (a static, inert Settings row existed and is removed with
+   it — UI that claims a state it cannot act on is worse than no UI). The reasoning was checked
+   before accepting it: what keeps a turn alive past backgrounding is the **foreground service** with
+   its persistent notification, which item 5 provides; a battery-optimization exemption matters
+   chiefly for work with no foreground presence, which this app does not attempt. Item 5 is therefore
+   load-bearing and stays.
+
 7. **Session persistence is files, not a database:** one append-only JSONL per session (header +
    contiguous `seq` events) plus a small index for the inbox. No Room, no SQLite, unless measured
    list rendering proves it necessary.
