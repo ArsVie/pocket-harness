@@ -66,8 +66,9 @@ Remove or gate before any release build:
 
 - `DebugEnvBootstrap` / `DebugWireLogger` — `BuildConfig.DEBUG`-gated, but must not exist in release.
   They are how the API key got onto the device without typing 93 characters.
-- `ExecProbe` — writes `files/exec-probe.txt` on every launch. It is the reproduction for the seccomp
-  finding, so keep the code and gate it behind a trigger file; stop running it unconditionally.
+- `ExecProbe` — ~~writes `files/exec-probe.txt` on every launch~~ **gated in v2**: it runs only when
+  `files/run-probe` exists. Still debug scaffolding; its sections now cover the bash experiments
+  (ADR-006). Keep the trigger discipline for release builds.
 - `ui/Fixtures.kt` — dead once the screens read real state.
 
 ## B-4 — `:core` seams that the app should not be re-implementing
@@ -129,3 +130,7 @@ tested, but no live turn has exercised either. Cheap to check on a slow turn.
   `adb reverse` does not reach WSL. `PLAN.md`.
 - **Battery-optimization disclaimer** — cut by the owner mid-build; the foreground service is what
   keeps a turn alive. `0005-app-shell.md` §6.
+- **bash userland** (v2) — GNU bash 5.3 built with the NDK ships as per-ABI assets and is preferred
+  at runtime; the platform shell is the fallback. `0006-shell-userland-bash.md`, ENVIRONMENT.md.
+- **getcwd stderr noise** (v2) — fixed at configure (`bash_cv_getcwd_malloc=yes`), not with an
+  `export PWD` band-aid. `0006-shell-userland-bash.md`.

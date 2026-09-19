@@ -102,6 +102,9 @@ simply never win on Android. This resolves ADR-001's open gap "which userland sh
 a Termux bootstrap, but the platform's. The `bash` tool interface is unchanged — it is still a real
 shell over a real filesystem, which is the property ADR-001 actually needed.
 
+**v2 update:** the userland is now the *bundled* GNU bash, with this platform shell as the runtime
+fallback — see "v2: the bash userland" below and ADR-006.
+
 Proven end to end in-app (orchestrator-verified, not taken on report): `rm work/doomed.txt` left
 `work/` containing only `keep.txt`, and the file reappeared as
 `files/workspace/.trash/<stamp>-doomed.txt`, with the deployed shim's first line being
@@ -147,3 +150,35 @@ fallback and is deliberately *not* taken — the decision was to keep the mechan
   pinning `targetSdk ≤ 28` is the other known path. ADR-001; the PoC takes targetSdk 28 (ADR-005).
 - Anything that must run under translation should avoid `madvise`/`memfd`-style tricks busybox does
   not need in the first place — the observed run is the evidence that the simple path works.
+
+## v2: the bash userland (September 2026)
+
+The platform shell works, but it is mksh + toybox — not the GNU bash a `bash` tool implies (no
+`[[ ]]`, no arrays, no `pipefail`). v2 closes that gap: the app now ships **GNU bash 5.3**, built
+for Android with the NDK, and prefers it; `/system/bin/sh` stays as the runtime fallback (ADR-006).
+
+| Step | Result |
+|---|---|
+| Build | `scripts/build-bash-android.sh` — bash 5.3 from the GNU sources; static link fails (bionic has no static libc), dynamic link succeeds and `readelf -d` shows only system libs (`libc.so`, `libdl.so`, interp `/system/bin/linker64`) |
+| Artifacts | `bash-x86_64` 1,284,544 bytes; `bash-aarch64` 1,288,736 bytes; digests in `userland/SHA256SUMS` |
+| **In-app run (the real test)** | exec'd from app data as the app uid, `Seccomp: 2` inherited: `exit 0`; `BASH_VERSION=5.3.0(1)-release`; arrays, `[[ ]]`, `pipefail`, pipelines, child exec through PATH (toybox), and the `rm` shim via kernel shebang — all green, **empty stderr** |
+| Same process, static musl busybox | still SIGSYS (exit 159) at applet dispatch — the filter is the discriminator, not the exec location, and bionic-built code passes it |
+
+One real bug was found and fixed at the root rather than papered over: bash cross-compiled (no
+configure runtime test) so `GETCWD_BROKEN` got compiled in, and every invocation printed
+`getcwd: cannot access parent directories: Permission denied` while walking up from the workspace
+(app storage under `/data`, which the app cannot list — `drwxrwx--x`). The fix is one configure
+cache variable, `bash_cv_getcwd_malloc=yes`: `scripts/getcwd-probe.c` proved on-device that
+bionic's `getcwd(NULL, 0)` allocates correctly from exactly that directory, so bash is configured
+to use the system call instead of its own walk-up emulation. Rebuilt clean; the noise is gone, not
+filtered.
+
+Runtime shape: `assets/userland/bash-<abi>` unpacks to `files/userland/bash` per
+`Build.SUPPORTED_ABIS` order; `AndroidShellBinaries.resolve()` self-tests it first and falls back
+to `/system/bin/sh`. `PATH` is the shim dir, then `/system/bin`. The exec probe
+(`files/exec-probe.txt`) records all of the above from inside the app process, and now runs only
+when `files/run-probe` exists (BACKLOG B-3).
+
+Licence: bash is GPL-3.0-or-later; distributing the APK carries the standard source-availability
+obligation. Record: `userland/PROVENANCE.md` + `scripts/build-bash-android.sh`.
+
