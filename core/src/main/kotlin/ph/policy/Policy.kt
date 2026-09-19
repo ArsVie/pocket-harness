@@ -33,6 +33,6 @@ interface TrustStore {
 interface TrashPolicy {
     fun trashDir(cwd: String): String
 
-    /** Directory holding the shipped `rm` shim; prepended to PATH, ahead of the busybox applets. */
+    /** Directory holding the shipped `rm` shim; prepended to PATH, ahead of the platform applets. */
     fun shimDir(): String
 }

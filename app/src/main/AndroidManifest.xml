@@ -12,8 +12,8 @@
 
     <!-- extractNativeLibs=true (equivalent): declared in build.gradle.kts as
          packaging.jniLibs.useLegacyPackaging = true, because AGP 9 rejects the manifest attribute
-         outright (issue #149770867). The shipped userland (static aarch64 busybox) must be
-         extracted and executable from the APK's native library dir (ADR-001 / ENVIRONMENT.md). -->
+         outright (issue #149770867). Currently a no-op: the shipped userland (bundled GNU bash,
+         ADR-006) exec's from app data (ADR-001 / ENVIRONMENT.md), not from the native library dir. -->
     <application
         android:allowBackup="false"
         android:label="@string/app_name"

@@ -1,18 +1,18 @@
-#!/bin/sh
+#!/system/bin/sh
 # PocketHarness `rm` shim — moving to trash instead of unlinking (ADR-004 §5).
 #
-# Deployed by the app with @SHELL@ substituted for the absolute path of the working shell, its
-# shebang rewritten to match, and placed FIRST on PATH. `PH_TRASH_DIR` is exported by the tool
-# layer as `<workspace>/.trash`; if it is unset the shim falls back to `$PWD/.trash`.
+# Deployed by [Userland.provision] from this asset, made executable, and placed FIRST on PATH.
+# `PH_TRASH_DIR` is exported by the tool layer as `<workspace>/.trash`; if it is unset the shim
+# falls back to `$PWD/.trash`. The shebang is fixed: the shim always runs under the platform
+# shell's mksh via the kernel, whatever shell the harness itself execs (bundled GNU bash 5.3, or
+# the platform shell as fallback — ADR-006).
 #
-# Only applets the deployed shell can actually run are used: mkdir/date/mv/basename/ls come from
-# the shell's own applet dir (`/system/bin` for the platform shell, the busybox symlink farm
-# otherwise). The shipped static busybox cannot dispatch *any* applet in the app process — every
-# dispatch dies with SIGSYS (signal 31, exit 159) under Android's inherited seccomp filter — so a
-# busybox-interpreted shim would be dead. See planning/ENVIRONMENT.md and files/exec-probe.txt.
+# Only applets that exist on the platform are used: mkdir/date/mv/basename/ls are toybox applets
+# in /system/bin. A static busybox userland is a measured dead end under the app seccomp filter
+# (SIGSYS on applet dispatch), so nothing here may depend on one. See planning/ENVIRONMENT.md.
 #
 # Known limits, accepted in ADR-002 and ADR-004: this intercepts `rm` invoked by name. A command
-# that reaches the applet another way (`busybox rm -rf x`) or a binary that calls unlink(2) is not
+# that reaches the applet another way (`toybox rm -rf x`) or a binary that calls unlink(2) is not
 # intercepted. The floor denies the catastrophic shapes before exec; this shim catches the rest.
 #
 # Flags are accepted and ignored: -r/-f/-rf/-i describe how a recursive delete would proceed, and

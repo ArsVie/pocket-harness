@@ -1,24 +1,23 @@
 package com.arsvie.pocketharness.platform
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import ph.prompt.Budgets
 import java.io.File
 
 /**
- * Wave-0 in-app exec proof. Unpacks the shipped userland, exec's candidates **inside the app
- * process**, and writes everything it observed — argv, exit code (with decoded signal),
- * stdout, stderr, exceptions — to `<filesDir>/exec-probe.txt` so the orchestrator can read it
- * back with `run-as`.
+ * In-app exec evidence machine (ADR-006 / ENVIRONMENT.md "v2: the bash userland").
  *
- * Two experiments, in order (ADR-001 / ENVIRONMENT.md "W^X"):
- *   A. the shipped static busybox, packaged as `jniLibs/arm64-v8a/libbusybox.so` and exec'd from
- *      the APK's native library dir instead of app data.
- *   B. the platform shell (`/system/bin/sh`, toybox), including a copy exec'd from app data and a
- *      `#!/system/bin/sh` script from app data — the shape the `rm` shim takes.
+ * Gated: it runs only when `<filesDir>/run-probe` exists — it is reproduction scaffolding, not
+ * launch-time work (B-3) — and `exec-probe.txt` is where its observations land for `run-as` reads.
  *
- * A row is only "working" if it is an **applet-carrying** invocation (not `--help`) returning
- * exit 0 with non-empty stdout. `--help` prints usage before applet dispatch, so it proves nothing.
+ * Sections:
+ *   resolution — `Userland.provision` log and the shell self-test outcome.
+ *   B — the platform shell (`/system/bin/sh`, mksh + toybox): the fallback path.
+ *   C — the bundled GNU bash at `files/userland/bash`: version + the child's seccomp status,
+ *       bash-only features, child exec through PATH, and the `rm` shim through bash.
+ *   smoke — the full multi-tool command through the shell [AndroidShellBinaries.resolve] chose.
  */
 object ExecProbe {
 
@@ -26,7 +25,15 @@ object ExecProbe {
 
     val probeFileName = "exec-probe.txt"
 
+    /** B-3: the probe is debug scaffolding; it must be asked for. */
+    private const val TRIGGER_NAME = "run-probe"
+
     fun run(context: Context) {
+        if (!File(context.filesDir, TRIGGER_NAME).exists()) {
+            Log.i(TAG, "exec probe skipped: files/$TRIGGER_NAME not present")
+            return
+        }
+
         val report = StringBuilder()
         val probeFile = File(context.filesDir, probeFileName)
         val bin = AndroidShellBinaries(context)
@@ -53,17 +60,13 @@ object ExecProbe {
             return
         }
 
-        val nativeBusybox = bin.nativeBinary
-        line("")
-        line("--- packaged native library (Experiment A candidate) ---")
-        line(
-            "libbusybox.so exists=${nativeBusybox.exists()} length=${nativeBusybox.length()} " +
-                "canExecute=${nativeBusybox.canExecute()} path=${nativeBusybox.absolutePath}",
-        )
-        line("asset busybox  exists=${bin.binary.exists()} length=${bin.binary.length()} path=${bin.binary.absolutePath}")
-
         // ── helpers ─────────────────────────────────────────────────────────────────────────
-        fun row(label: String, argv: List<String>, env: Map<String, String> = emptyMap(), cwd: File = workspace) {
+        fun row(
+            label: String,
+            argv: List<String>,
+            env: Map<String, String> = emptyMap(),
+            cwd: File = workspace,
+        ): Userland.DirectResult {
             val r = try {
                 Userland.execDirect(argv, cwd = cwd, env = env)
             } catch (t: Throwable) {
@@ -74,68 +77,74 @@ object ExecProbe {
                 "[$label] argv=" + argv.joinToString(" ") + " -> exit=" + r.exitCode + sig +
                     " out=<" + r.out.trim().take(400) + "> err=<" + r.err.trim().take(300) + ">",
             )
-            r
+            return r
         }
 
-        // ── Experiment A: busybox from the APK native library dir ───────────────────────────
+        // ── resolution ──────────────────────────────────────────────────────────────────────
         line("")
-        line("=== EXPERIMENT A: static busybox from nativeLibraryDir ===")
-        if (nativeBusybox.exists()) {
-            val aEnv = mapOf("PATH" to bin.pathPrefix())
-            row("A control: libbusybox --help (NOT proof)", listOf(nativeBusybox.absolutePath, "--help"), aEnv)
-            row("A applet: libbusybox echo", listOf(nativeBusybox.absolutePath, "echo", "A_ECHO_OK"), aEnv)
-            row("A applet: libbusybox true", listOf(nativeBusybox.absolutePath, "true"), aEnv)
-            row("A shell: libbusybox sh -c echo", listOf(nativeBusybox.absolutePath, "sh", "-c", "echo A_ASH_OK; uname -a"), aEnv)
-
-            // busybox picks its applet from argv[0]'s basename, so a binary named `libbusybox.so`
-            // exits 127 "applet not found" before any applet code runs. A symlink named `busybox`
-            // pointing at the native-library file fixes the name while still exec'ing the bytes
-            // from nativeLibraryDir — the only way to tell a naming failure from a seccomp failure.
-            val bbLink = File(context.filesDir, "probe-shell").apply { mkdirs() }.let { File(it, "busybox") }
-            try {
-                bbLink.delete()
-                android.system.Os.symlink(nativeBusybox.absolutePath, bbLink.absolutePath)
-                row("A via symlink named busybox: echo", listOf(bbLink.absolutePath, "echo", "A_LINK_ECHO_OK"), aEnv)
-                row("A via symlink named busybox: sh -c", listOf(bbLink.absolutePath, "sh", "-c", "echo A_LINK_ASH_OK"), aEnv)
-                row("A via symlink named busybox: --help", listOf(bbLink.absolutePath, "--help"), aEnv)
-            } catch (t: Throwable) {
-                line("[A symlink busybox -> libbusybox.so] THREW ${t.javaClass.name}: ${t.message}")
-            }
-        } else {
-            line("[A] nativeLibraryDir has no libbusybox.so -> Experiment A cannot run")
-        }
+        line("=== shell resolution ===")
+        line(bin.resolve())
+        line("chosen shell = ${bin.chosen.absolutePath} (kind=${bin.kind})")
+        line("abis=${Build.SUPPORTED_ABIS.joinToString(",")}; bash asset for this device: ${bin.bashAsset ?: "<none>"}")
 
         // ── Experiment B: the platform shell ────────────────────────────────────────────────
         line("")
-        line("=== EXPERIMENT B: platform shell (bionic) ===")
+        line("=== EXPERIMENT B: platform shell (bionic mksh + toybox) ===")
         val systemEnv = mapOf("PATH" to "/system/bin")
         row("B system sh -c + seccomp of the child",
             listOf("/system/bin/sh", "-c", "echo B_SYSTEM_SH_OK; grep -E '^Seccomp' /proc/self/status; id -u"),
             systemEnv)
         row("B toybox echo applet", listOf("/system/bin/toybox", "echo", "B_TOYBOX_OK"), systemEnv)
         row("B toybox applet by name (/system/bin/echo)", listOf("/system/bin/echo", "B_TOYBOX_BYNAME_OK"), systemEnv)
-        row("B grep applet (/system/bin/grep)", listOf("/system/bin/grep", "Seccomp", "/proc/self/status"), systemEnv)
 
-        // a COPY of /system/bin/sh exec'd from app data (same shape the busybox attempt used)
+        // a script in app data with the platform shebang — the shape the rm shim takes
         val probeDir = File(context.filesDir, "probe-shell").apply { mkdirs() }
-        val copiedSh = File(probeDir, "sh")
-        try {
-            File("/system/bin/sh").inputStream().use { input -> copiedSh.outputStream().use { input.copyTo(it) } }
-            copiedSh.setExecutable(true, true)
-            row("B copied bionic /system/bin/sh from app data",
-                listOf(copiedSh.absolutePath, "-c", "echo B_COPIED_SH_OK"), systemEnv)
-        } catch (t: Throwable) {
-            line("[B copied bionic /system/bin/sh from app data] THREW ${t.javaClass.name}: ${t.message}")
-        }
-
-        // a script in app data with a platform shebang — the shape the rm shim takes
         val script = File(probeDir, "hello.sh")
         try {
             script.writeText("#!/system/bin/sh\necho B_SHEBANG_SCRIPT_OK\nexit 0\n")
             script.setExecutable(true, true)
             row("B script with #!/system/bin/sh shebang from app data", listOf(script.absolutePath), systemEnv)
         } catch (t: Throwable) {
-            line("[B script with #!/system/bin/sh shebang from app data] THREW ${t.javaClass.name}: ${t.message}")
+            line("[B shebang script] THREW ${t.javaClass.name}: ${t.message}")
+        }
+
+        // ── Experiment C: the bundled GNU bash ──────────────────────────────────────────────
+        line("")
+        line("=== EXPERIMENT C: bundled GNU bash (files/userland/bash) ===")
+        val bash = bin.bash
+        if (!bash.exists()) {
+            line("[C] no bundled bash at ${bash.absolutePath} -> Experiment C cannot run")
+        } else {
+            line("[C] candidate = ${bash.absolutePath} (${bash.length()} bytes, canExecute=${bash.canExecute()})")
+            val cEnv = mapOf("PATH" to "/system/bin")
+            row(
+                "C bash version + seccomp",
+                listOf(bash.absolutePath, "-c",
+                    "echo C_BASH_OK; echo BASH_VERSION=\$BASH_VERSION; grep -E '^Seccomp' /proc/self/status; id -u"),
+                cEnv,
+            )
+            row(
+                "C bash features (arrays, cond, pipefail, pipe)",
+                listOf(bash.absolutePath, "-c",
+                    "a=(one two three); echo ARRAY=\${a[1]}; [[ 5 -gt 3 ]] && echo COND_OK; " +
+                        "set -o pipefail && echo PIPEFAIL_SET; echo pipeline | cat | cat"),
+                cEnv,
+            )
+            row(
+                "C child exec through PATH (toybox)",
+                listOf(bash.absolutePath, "-c", "ls /system/bin | wc -l; echo CHILD_EXEC_OK"),
+                cEnv,
+            )
+            row(
+                "C rm shim through bash (kernel shebang -> /system/bin/sh)",
+                listOf(bash.absolutePath, "-c",
+                    "mkdir -p c-work; echo doomed > c-work/f.txt; rm c-work/f.txt; " +
+                        "echo after-rm: \$(ls c-work); echo trash-has-doomed: \$(ls -a .trash | grep -c f.txt)"),
+                mapOf(
+                    "PATH" to (bin.shimDir.absolutePath + ":" + "/system/bin"),
+                    "PH_TRASH_DIR" to trash.absolutePath,
+                ),
+            )
         }
 
         // ── the full command the harness runs, through the PROVEN shell ─────────────────────

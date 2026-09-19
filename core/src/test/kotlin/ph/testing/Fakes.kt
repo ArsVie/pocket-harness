@@ -79,7 +79,7 @@ class FakeShell(
 }
 
 class FakeShellBinaries(
-    private val shell: String = "/data/user/0/com.arsvie.pocketharness/files/userland/busybox",
+    private val shell: String = "/data/user/0/com.arsvie.pocketharness/files/userland/bash",
     private val path: String = "/data/user/0/com.arsvie.pocketharness/files/shims:"
         + "/data/user/0/com.arsvie.pocketharness/files/userland/applets",
 ) : ShellBinaries {

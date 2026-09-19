@@ -29,9 +29,9 @@ object ToolSchemas {
             "'pwd' to confirm where you are.",
         "* You don't have access to the internet via this tool, and there is no package manager: " +
             "apt, pip, npm and similar are not available. Use what the shell already provides.",
-        "* The shell is mksh with Android's toybox utilities — not GNU bash and not busybox. Prefer " +
-            "POSIX forms, and check a flag with --help if you are unsure rather than assuming GNU " +
-            "behaviour; some GNU options and tools are absent.",
+        "* The shell is GNU bash 5.3 on Android, with the toybox utilities; most common tools are " +
+            "present, but some GNU options and tools are not. Check a flag with --help if you are " +
+            "unsure rather than assuming GNU behaviour.",
         "* To inspect a particular line range of a file, e.g. lines 10-25, try 'sed -n 10,25p " +
             "/path/to/the/file'. Check the size with 'wc -l' before dumping a whole file.",
         "* To search, use 'grep -rn pattern path'. There is no separate search tool.",

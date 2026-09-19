@@ -73,7 +73,7 @@ class BashTool(
         )
     }
 
-    /** The shim directory first, then the busybox applets; `PH_TRASH_DIR` is the workspace's. */
+    /** The shim directory first, then the platform's toybox applets; `PH_TRASH_DIR` is the workspace's. */
     private fun environment(cwd: String): Map<String, String> = mapOf(
         ENV_PATH to "${trash.shimDir()}:${binaries.pathPrefix()}",
         ENV_TRASH_DIR to trash.trashDir(cwd),

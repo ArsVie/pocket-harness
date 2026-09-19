@@ -16,14 +16,11 @@ android {
         applicationId = "com.arsvie.pocketharness"
         minSdk = 28 // ADR-005 §8: same pin as targetSdk. Also the floor for java.lang.Process#waitFor(timeout)
         targetSdk = 28 // deliberate: keeps exec of app-data files legal (ADR-001 / ADR-005 §8)
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
 
-        // The shipped userland is a static aarch64 busybox; the API-36 x86_64 emulator runs it
-        // through NDK translation (ENVIRONMENT.md).
-        ndk {
-            abiFilters += "arm64-v8a"
-        }
+        // The bundled shell (GNU bash 5.3, ADR-006) ships as per-ABI assets — `userland/bash-x86_64`
+        // and `userland/bash-aarch64` — picked at runtime from Build.SUPPORTED_ABIS; no jniLibs.
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -48,10 +45,8 @@ android {
 
     packaging {
         jniLibs {
-            // Only meaningful once something lands in jniLibs/arm64-v8a (the fallback exec path in
-            // ADR-001). Today the userland ships as an asset and is unpacked to files/userland, so
-            // this is currently a no-op — it becomes load-bearing if W0.3's probe proves the asset
-            // path is blocked and the binary has to be packaged as a native library instead.
+            // Still a no-op: nothing lands in jniLibs — the bundled shell exec's from app data
+            // (ADR-006). Kept so a future native fallback can turn legacy packaging on.
             useLegacyPackaging = true
         }
     }

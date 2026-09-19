@@ -44,13 +44,13 @@ object Fixtures {
             mode = ExecutionMode.DEFAULT,
             blocks = listOf(
                 Block.UserText("Read ShellBinaries and tell me what the app must provide.", queued = false),
-                Block.Thinking("Busybox is unpacked to files/userland; PATH is shim dir then applets."),
+                Block.Thinking("Bash is unpacked to files/userland; PATH is the shim dir then /system/bin."),
                 Block.AssistantText("The app owns three ports: Shell, ShellBinaries, and SecretStore."),
                 Block.ToolCall(
                     callId = "c-1",
                     name = "bash",
                     summary = "ls -la files/userland",
-                    output = "busybox\nbin/\n",
+                    output = "bash\n",
                     isError = false,
                     expandedByDefault = false,
                 ),

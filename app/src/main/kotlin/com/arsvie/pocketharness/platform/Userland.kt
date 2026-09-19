@@ -1,36 +1,33 @@
 package com.arsvie.pocketharness.platform
 
 import android.content.Context
-import android.util.Log
+import android.os.Build
 import ph.ports.ShellBinaries
 import java.io.File
 
 /** Which shell the harness is actually running, decided by an in-process self-test. */
 enum class ShellKind {
-    /** The shipped static busybox, exec'd from the APK native library dir or app data; `busybox sh -c`. */
-    BUSYBOX,
+    /** The bundled GNU bash (ADR-006), unpacked from assets to `files/userland/bash`. */
+    BASH,
 
-    /** The platform's own bionic shell; `sh -c`. Runs under the app's seccomp filter by construction. */
+    /** The platform's own bionic shell (`/system/bin/sh`, mksh); `sh -c`. The fallback. */
     PLATFORM,
 }
 
 /**
- * Where the shipped userland actually lives on this device (ADR-001 / ADR-005 §8).
+ * Where the shipped userland actually lives on this device (ADR-006; ADR-001's open question
+ * "which userland ships" was settled by running it — ENVIRONMENT.md):
  *
- * Candidates, in preference order, with the evidence that picks between them recorded in
- * `files/exec-probe.txt` (ExecProbe):
- *   1. [nativeBinary] `nativeLibraryDir/libbusybox.so` — the static busybox packaged as a native
- *      library so it is exec'd from the APK's native library dir, not from app data.
- *   2. [systemShell] `/system/bin/sh` — the platform's bionic mksh. Android's own tools are built
- *      for the app seccomp filter, so this is the candidate userland if (1) cannot dispatch applets.
- *   3. [binary] the asset-unpacked busybox at `files/userland/busybox` — retained as the fallback
- *      for a build/device where neither packaged path is present.
+ *   1. [bash] GNU bash 5.3, built with the NDK against bionic for this device's ABI
+ *      (`x86_64` / `arm64-v8a`), shipped as an asset, unpacked to `files/userland/bash`, exec'd
+ *      from app data. Measured in-app: it runs under the app seccomp filter that kills a static
+ *      musl busybox (SIGSYS), so it is the preferred shell.
+ *   2. [systemShell] `/system/bin/sh` — the platform mksh. Always present; the fallback when the
+ *      bundled bash cannot start on some future device.
  *
  * Layout under `context.filesDir`:
- *   userland/busybox   the static aarch64 busybox, unpacked from `assets/userland/busybox`, +x
- *   userland/bin/      applet symlinks (`busybox --install -s`) for the busybox PATH
- *   shims/rm           the `rm`→trash shim from `assets/userland/rm.sh`, shebang + `@SHELL@`
- *                      rewritten for whichever shell [resolve] proves works (ADR-004 §5)
+ *   userland/bash      the bundled bash for this ABI, unpacked from `assets/userland/bash-<abi>`
+ *   shims/rm           the `rm`→trash shim from `assets/userland/rm.sh` (shebang in-file)
  *
  * Everything here is a path, not a policy: `:core` never guesses a path (ShellBinaries).
  */
@@ -38,17 +35,11 @@ class AndroidShellBinaries(context: Context) : ShellBinaries {
 
     private val userlandDir: File = File(context.filesDir, "userland")
 
-    /** The static busybox as unpacked from assets — candidate 3 (fallback). */
-    val binary: File = File(userlandDir, "busybox")
+    /** The bundled bash for this device's ABI; unpacked by [Userland.provision]. */
+    val bash: File = File(userlandDir, "bash")
 
-    /** The same busybox packaged as a native library (candidate 1). */
-    val nativeBinary: File = File(context.applicationInfo.nativeLibraryDir, "libbusybox.so")
-
-    /** The platform shell (candidate 2). */
+    /** The platform shell — the fallback when the bundled bash cannot be proven. */
     val systemShell: File = File("/system/bin/sh")
-
-    /** The busybox applet dir (symlinks installed by [Userland.provision]). */
-    val appletDir: File = File(userlandDir, "bin")
 
     /** Directory holding the shipped `rm` shim. */
     val shimDir: File = File(context.filesDir, "shims")
@@ -56,10 +47,16 @@ class AndroidShellBinaries(context: Context) : ShellBinaries {
     /** The shim itself. */
     val shim: File = File(shimDir, "rm")
 
-    /** Set by [resolve] after the self-test; defaults to the packaged native busybox. */
-    var kind: ShellKind = ShellKind.BUSYBOX
+    /**
+     * The bash asset for this device, picked in [Build.SUPPORTED_ABIS] order so the emulator takes
+     * the x86_64 build and a phone takes arm64-v8a. Null on an ABI with no shipped build.
+     */
+    val bashAsset: String? = Build.SUPPORTED_ABIS.firstNotNullOfOrNull { abi -> ABI_ASSETS[abi] }
+
+    /** Set by [resolve] after the self-test; the platform shell until proven otherwise. */
+    var kind: ShellKind = ShellKind.PLATFORM
         private set
-    var chosen: File = nativeBinary
+    var chosen: File = systemShell
         private set
 
     private var resolved = false
@@ -68,9 +65,9 @@ class AndroidShellBinaries(context: Context) : ShellBinaries {
     /**
      * Force resolution before any path is handed out. This exists because a caller *did* forget:
      * `AppGraph` built one instance and `Userland.provision` resolved a different one, so the shell
-     * kept the unresolved default (`nativeLibraryDir/libbusybox.so` — a file the APK does not ship)
-     * and every command died with ENOENT. Making the accessors resolve means there is no way to hold
-     * an unresolved instance and read a path off it.
+     * kept the unresolved default (which was not even shipped) and every command died with ENOENT.
+     * Making the accessors resolve means there is no way to hold an unresolved instance and read a
+     * path off it.
      */
     private fun ensureResolved() {
         if (!resolved) resolve()
@@ -82,52 +79,60 @@ class AndroidShellBinaries(context: Context) : ShellBinaries {
     }
 
     /**
-     * PATH: the `rm` shim dir FIRST, then the shell's own applet dir. For the platform shell the
-     * applet dir is `/system/bin`; for busybox it is the symlink farm in app data.
+     * PATH: the `rm` shim dir FIRST, then `/system/bin` (toybox applets) — for both shells; the
+     * bundled bash has no applet dir of its own, it is a plain interpreter.
      */
     override fun pathPrefix(): String {
         ensureResolved()
-        return shimDir.absolutePath + File.pathSeparator +
-            if (kind == ShellKind.BUSYBOX) appletDir.absolutePath else "/system/bin"
+        return shimDir.absolutePath + File.pathSeparator + SYSTEM_BIN
     }
 
-    /** argv[0] + args for running `command` under the chosen shell. */
+    /** argv for running `command` under the chosen shell: `[shell, -c, command]` in both cases. */
     fun argv(command: String): List<String> {
         ensureResolved()
-        return if (kind == ShellKind.BUSYBOX) listOf(chosen.absolutePath, "sh", "-c", command)
-        else listOf(chosen.absolutePath, "-c", command)
+        return listOf(chosen.absolutePath, "-c", command)
     }
 
     /**
-     * Run the cheap self-test that decides which shell can actually dispatch work in this process:
-     * an applet-carrying invocation (`echo`) that must return exit 0 with non-empty stdout. `--help`
-     * is explicitly *not* accepted as proof: it prints usage before applet dispatch.
+     * Run the cheap self-test that decides which shell can actually work in this process: a
+     * command-carrying invocation that must return exit 0 with non-empty stdout. Bash is preferred;
+     * the platform shell is tried when bash cannot start, so a broken bash never strands the app.
      */
     fun resolve(): String {
         if (resolved) return resolveLog
 
         fun works(argv: List<String>): Boolean = try {
-            val r = Userland.execDirect(argv, env = mapOf("PATH" to "/system/bin"))
+            val r = Userland.execDirect(argv, env = mapOf("PATH" to SYSTEM_BIN))
             r.exitCode == 0 && r.out.isNotBlank()
         } catch (t: Throwable) {
             false
         }
 
-        if (nativeBinary.exists() && works(listOf(nativeBinary.absolutePath, "echo", "selftest"))) {
-            kind = ShellKind.BUSYBOX
-            chosen = nativeBinary
-            resolveLog = "shell self-test: nativeLibraryDir/libbusybox.so dispatches applets -> BUSYBOX"
+        if (bash.exists() && works(listOf(bash.absolutePath, "-c", "echo selftest"))) {
+            kind = ShellKind.BASH
+            chosen = bash
+            resolveLog = "shell self-test: bundled bash works -> BASH (${bash.absolutePath})"
         } else if (systemShell.exists() && works(listOf(systemShell.absolutePath, "-c", "echo selftest"))) {
             kind = ShellKind.PLATFORM
             chosen = systemShell
-            resolveLog = "shell self-test: native busybox did NOT dispatch, /system/bin/sh works -> PLATFORM"
+            resolveLog = "shell self-test: bundled bash did NOT work, /system/bin/sh works -> PLATFORM"
         } else {
-            kind = ShellKind.BUSYBOX
-            chosen = binary
-            resolveLog = "shell self-test: neither packaged path worked; falling back to asset busybox ${binary.absolutePath}"
+            kind = ShellKind.PLATFORM
+            chosen = systemShell
+            resolveLog = "shell self-test: neither bash nor the platform shell passed; falling back to /system/bin/sh"
         }
         resolved = true
         return resolveLog
+    }
+
+    private companion object {
+        const val SYSTEM_BIN = "/system/bin"
+
+        /** Asset per ABI; the shell binary is not a native-lib — it is exec'd from app data. */
+        val ABI_ASSETS = mapOf(
+            "x86_64" to "userland/bash-x86_64",
+            "arm64-v8a" to "userland/bash-aarch64",
+        )
     }
 }
 
@@ -135,53 +140,51 @@ object Userland {
 
     const val TAG = "PocketHarness"
 
-    /** The `rm` shim's shebang line for a given shell. Android has no `/bin/sh`. */
-    fun shimShebang(kind: ShellKind, shellPath: String): String =
-        if (kind == ShellKind.BUSYBOX) "#!" + shellPath + " sh" else "#!/system/bin/sh"
-
     /**
-     * Unpack the shipped busybox + `rm` shim into app-private storage, make both executable, resolve
-     * which shell works, then write the shim with the shebang that shell can actually execute.
-     * Idempotent; safe to call on every start. Returns a human-readable log line per step.
+     * Unpack the bundled bash for this device's ABI into app-private storage, make it executable,
+     * resolve which shell works, then write the `rm` shim from its asset. Idempotent; safe to call
+     * on every start. Returns a human-readable log line per step (the exec probe records it).
      */
     fun provision(context: Context): List<String> {
         val bin = AndroidShellBinaries(context)
         val log = mutableListOf<String>()
 
-        // Fallback first: the asset busybox is always unpacked, whichever shell wins. It is what a
-        // future build/device without the native library or platform shell falls back to.
-        bin.binary.parentFile?.mkdirs()
-        if (!bin.binary.exists() || bin.binary.length() == 0L) {
-            context.assets.open("userland/busybox").use { input ->
-                bin.binary.outputStream().use { input.copyTo(it) }
+        // v2 (ADR-006): the busybox userland was retired after the app seccomp filter was measured
+        // to kill static musl applets (SIGSYS). Remove anything it left behind on upgrade.
+        val legacyRoot = bin.bash.parentFile
+        if (legacyRoot != null) {
+            listOf(File(legacyRoot, "busybox"), File(legacyRoot, "bin")).forEach { leftover ->
+                if (leftover.exists()) {
+                    leftover.deleteRecursively()
+                    log += "removed legacy busybox artifact ${leftover.absolutePath}"
+                }
             }
-            log += "unpacked assets/userland/busybox -> ${bin.binary.absolutePath} (${bin.binary.length()} bytes)"
-        } else {
-            log += "busybox already unpacked at ${bin.binary.absolutePath} (${bin.binary.length()} bytes)"
         }
-        bin.binary.setExecutable(true, true)
-        log += "chmod +x ${bin.binary.absolutePath} (canExecute=${bin.binary.canExecute()})"
 
-        // Which shell actually works in this process? (evidence: ExecProbe / exec-probe.txt)
+        // 1. The bash asset for this ABI -> files/userland/bash
+        val asset = bin.bashAsset
+        if (asset == null) {
+            log += "no bundled bash for abis=${Build.SUPPORTED_ABIS.joinToString(",")}: the platform shell will be used"
+        } else {
+            legacyRoot?.mkdirs()
+            if (!bin.bash.exists() || bin.bash.length() == 0L) {
+                context.assets.open(asset).use { input ->
+                    bin.bash.outputStream().use { input.copyTo(it) }
+                }
+                log += "unpacked assets/$asset -> ${bin.bash.absolutePath} (${bin.bash.length()} bytes)"
+            } else {
+                log += "bash already unpacked at ${bin.bash.absolutePath} (${bin.bash.length()} bytes)"
+            }
+            bin.bash.setExecutable(true, true)
+            log += "chmod +x ${bin.bash.absolutePath} (canExecute=${bin.bash.canExecute()})"
+        }
+
+        // 2. Which shell actually works in this process? (evidence: ExecProbe / exec-probe.txt)
         log += bin.resolve()
 
-        // Applet symlinks so PATH resolves `sh`, `mv`, `date`, `basename`, `mkdir`, `ls`, `uname`…
-        // Only meaningful for the busybox shell; on the platform shell PATH is /system/bin.
-        if (!File(bin.appletDir, "sh").exists()) {
-            bin.appletDir.mkdirs()
-            val r = execDirect(bin.binary.absolutePath, "--install", "-s", bin.appletDir.absolutePath)
-            log += "busybox --install -s ${bin.appletDir.absolutePath} -> exit ${r.exitCode}; stderr=${r.err.ifBlank { "<empty>" }}"
-        } else {
-            log += "applet dir already installed at ${bin.appletDir.absolutePath}"
-        }
-
-        // The rm shim: @SHELL@ is replaced with the absolute shell path, and the shebang is rewritten
-        // to match the shell that was proven to work. A shim whose interpreter traps with SIGSYS (or
-        // ENOENT, since Android has no /bin/sh) is useless, so this must follow [bin.resolve].
+        // 3. The rm shim ships complete (fixed /system/bin/sh shebang; no substitution step).
         bin.shimDir.mkdirs()
         val shimText = context.assets.open("userland/rm.sh").use { it.bufferedReader().readText() }
-            .replaceFirst("#!/bin/sh", shimShebang(bin.kind, bin.shellPath()))
-            .replace("@SHELL@", bin.shellPath())
         bin.shim.writeText(shimText)
         bin.shim.setExecutable(true, true)
         log += "wrote shim ${bin.shim.absolutePath} (canExecute=${bin.shim.canExecute()}, " +

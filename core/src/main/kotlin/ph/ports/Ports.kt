@@ -28,7 +28,7 @@ interface ShellBinaries {
     /** Absolute path to the shell binary to exec. */
     fun shellPath(): String
 
-    /** PATH prefix holding the `rm` shim first, then the busybox applets. */
+    /** PATH prefix holding the `rm` shim first, then the platform's toybox applets. */
     fun pathPrefix(): String
 }
 

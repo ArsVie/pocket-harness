@@ -11,15 +11,14 @@ import java.util.concurrent.TimeUnit
  * The real shell on the device, in-process (ADR-001).
  *
  * Which binary that is was decided empirically, not by argument: [AndroidShellBinaries.resolve]
- * self-tests an applet-carrying invocation and ExecProbe records the raw evidence in
- * `files/exec-probe.txt`. Two shapes exist:
- *  - `BusyBox`  — `<busybox> sh -c <command>`
- *  - `Platform` — `/system/bin/sh -c <command>` (bionic mksh, built for the app seccomp filter)
+ * self-tests a command-carrying invocation and ExecProbe records the raw evidence in
+ * `files/exec-probe.txt`. One shape now (ADR-006): `<shell> -c <command>`, where `<shell>` is the
+ * bundled GNU bash (`files/userland/bash`) or, failing its self-test, `/system/bin/sh`.
  *
  * Decisions, documented as the task requires:
  *  - **Invocation**: `ProcessBuilder(binaries.argv(command))`. No system shell is consulted unless
  *    the self-test proved the platform shell is the only one that works.
- *  - **PATH**: the `rm` shim dir FIRST, then the shell's applet dir ([ShellBinaries.pathPrefix]),
+ *  - **PATH**: the `rm` shim dir FIRST, then `/system/bin` ([ShellBinaries.pathPrefix]),
  *    so a bare `rm` hits the shim (ADR-004 §5).
  *  - **env**: the caller's map is exported verbatim over the inherited environment (the tool layer
  *    passes `PH_TRASH_DIR`); PATH is set last so a caller cannot accidentally shadow the shims.
@@ -41,8 +40,7 @@ class AndroidShell(private val binaries: AndroidShellBinaries) : Shell {
         val home = File(cwd).absoluteFile
         val tmp = File(home, TMP_DIR_NAME).apply { mkdirs() }
 
-        // argv is `<shell> sh -c <command>` for busybox, `<shell> -c <command>` for the platform
-        // shell; [AndroidShellBinaries.argv] owns that difference.
+        // argv is `<shell> -c <command>`; [AndroidShellBinaries.argv] owns the choice of shell.
         val process = ProcessBuilder(binaries.argv(command))
             .directory(home)
             .apply {
