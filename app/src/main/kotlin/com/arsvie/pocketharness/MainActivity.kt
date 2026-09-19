@@ -3,39 +3,40 @@ package com.arsvie.pocketharness
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.arsvie.pocketharness.platform.ExecProbe
-import com.arsvie.pocketharness.ui.ApprovalDialog
-import com.arsvie.pocketharness.ui.Composer
-import com.arsvie.pocketharness.ui.NewThreadRow
-import com.arsvie.pocketharness.ui.ScreenScaffold
+import com.arsvie.pocketharness.ui.PocketHarnessTheme
 import com.arsvie.pocketharness.ui.SettingsScreen
-import com.arsvie.pocketharness.ui.ThreadListScreen
-import com.arsvie.pocketharness.ui.ThreadViewScreen
+import com.arsvie.pocketharness.ui.ThreadScreen
+import com.arsvie.pocketharness.ui.ThreadsScreen
 
 /**
- * The app shell (ADR-005): three screens — thread list, thread view, settings — rendered from
- * [ph.ui.UiState] and driven by [AppViewModel]. No logic lives here; the state comes from `:core`
- * through the ViewModel.
+ * The app shell (ADR-005 §1, restyled by ADR-007): three screens — threads, thread, settings —
+ * reached by real navigation (back + gear), not a tab strip. Rendered from [ph.ui.UiState] and
+ * driven by [AppViewModel]; no logic here.
  *
- * On start it also kicks off the in-app exec probe, which is the Wave-0 proof that the shipped
- * userland runs in-process on this device (writes filesDir/exec-probe.txt).
+ * On start it also kicks off the in-app exec probe, which is gated behind `files/run-probe` and
+ * writes `filesDir/exec-probe.txt` when asked for (B-3).
  */
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
 
         // DEBUG-ONLY test scaffolding: seed the route + key from filesDir/debug-env.json before the
         // graph is built. Gated on BuildConfig.DEBUG; a no-op in release (see DebugEnvBootstrap).
@@ -52,8 +53,8 @@ class MainActivity : ComponentActivity() {
         val viewModel = AppViewModel(applicationContext)
 
         setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
+            PocketHarnessTheme {
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     PocketHarnessApp(viewModel)
                 }
             }
@@ -65,75 +66,53 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** Where the user is. One open thread at a time is the ViewModel's own invariant. */
+private sealed interface Screen {
+    data object Threads : Screen
+    data object Thread : Screen
+    data object Settings : Screen
+}
+
 @Composable
 private fun PocketHarnessApp(vm: AppViewModel) {
     val ui = vm.ui
-    var tab by remember { mutableStateOf(0) }
+    var screen by remember { mutableStateOf<Screen>(Screen.Threads) }
+    val backToThreads: () -> Unit = { screen = Screen.Threads }
 
-    val tabs = listOf("Threads", "Thread", "Settings")
-    val subtitles = listOf(
-        "${ui.threads.size} threads",
-        ui.open?.title ?: "no thread open",
-        ui.settings?.let { "mode " + it.mode.name } ?: "loading…",
-    )
+    BackHandler(enabled = screen != Screen.Threads) { backToThreads() }
 
-    ScreenScaffold(
-        title = "PocketHarness",
-        subtitle = subtitles[tab],
-        tabs = tabs,
-        selected = tab,
-        onSelect = { tab = it },
-    ) {
-        when (tab) {
-            0 -> Column(modifier = Modifier.fillMaxSize()) {
-                NewThreadRow {
-                    vm.newThread()
-                    tab = 1
-                }
-                ThreadListScreen(
-                    threads = ui.threads,
-                    onOpen = { id ->
-                        vm.openThread(id)
-                        tab = 1
-                    },
-                )
-            }
+    when (screen) {
+        Screen.Threads -> ThreadsScreen(
+            threads = ui.threads,
+            onOpen = { id ->
+                vm.openThread(id)
+                screen = Screen.Thread
+            },
+            onNew = {
+                vm.newThread()
+                screen = Screen.Thread
+            },
+            onOpenSettings = { screen = Screen.Settings },
+        )
 
-            1 -> {
-                val open = ui.open
-                if (open == null) {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        NewThreadRow {
-                            vm.newThread()
-                            tab = 1
-                        }
-                    }
-                } else {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        Box(modifier = Modifier.weight(1f)) {
-                            ThreadViewScreen(open)
-                        }
-                        Composer(
-                            running = open.running,
-                            onSend = { vm.send(it) },
-                            onStop = { vm.stop() },
-                        )
-                    }
-                }
-            }
+        Screen.Thread -> ThreadScreen(
+            open = ui.open,
+            onBack = backToThreads,
+            onSend = { vm.send(it) },
+            onStop = { vm.stop() },
+            onDecideApproval = { vm.decideApproval(it) },
+        )
 
-            else -> ui.settings?.let { settings ->
-                SettingsScreen(
-                    settings = settings,
-                    onModeChange = { mode -> vm.changeMode(mode) },
-                    onEdit = { field, value -> vm.editSetting(field, value) },
-                )
-            }
+        Screen.Settings -> ui.settings?.let { settings ->
+            SettingsScreen(
+                settings = settings,
+                shell = vm.shellInfo,
+                onBack = backToThreads,
+                onModeChange = { mode -> vm.changeMode(mode) },
+                onEdit = { field, value -> vm.editSetting(field, value) },
+            )
+        } ?: Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(text = "Loading…", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-    }
-
-    // Deliverable 5: the first-run approval, raised whenever the loop hits an untrusted folder.
-    ui.open?.pendingApproval?.let { prompt ->
-        ApprovalDialog(prompt = prompt, onDecide = { granted -> vm.decideApproval(granted) })
     }
 }

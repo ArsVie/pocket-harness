@@ -75,6 +75,8 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    // Glyphs for the v2 chrome (back, gear, send/stop, chevrons). Not pulled in by material3.
+    implementation(libs.androidx.compose.material.icons.core)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

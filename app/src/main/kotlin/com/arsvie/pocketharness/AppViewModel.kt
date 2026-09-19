@@ -23,12 +23,17 @@ import ph.ui.OpenThread
 import ph.ui.SettingsState
 import ph.ui.ThreadRow
 import ph.ui.UiState
+import com.arsvie.pocketharness.platform.ShellKind
+import com.arsvie.pocketharness.platform.Userland
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
 
 /** Which settings row is being edited (the dialog is app chrome, not `:core`). */
 enum class SettingsField { BASE_URL, MODEL, REASONING_EFFORT, API_KEY }
+
+/** What shell the app is actually running (ADR-006) — shown in Settings → Diagnostics. */
+data class ShellInfo(val title: String, val detail: String)
 
 /**
  * The one state holder (ADR-005 §1: no logic in composables). It owns the [AppGraph], the open
@@ -49,6 +54,10 @@ class AppViewModel(context: Context) {
     var ui by mutableStateOf(UiState())
         private set
 
+    /** Filled async at start-up: which shell the self-test proved works (ADR-006). */
+    var shellInfo by mutableStateOf<ShellInfo?>(null)
+        private set
+
     private var threads: List<ThreadRow> = emptyList()
     private var settingsRow: SettingsState? = null
     private var session: Session? = null
@@ -64,6 +73,7 @@ class AppViewModel(context: Context) {
                 graph.prepare()
                 mode = graph.settings.mode
                 refreshThreads()
+                shellInfo = readShellInfo()
             } catch (t: Throwable) {
                 // A start-up failure (bad preset, no userland) is surfaced, never swallowed.
                 appendFailure(null, t)
@@ -258,6 +268,24 @@ class AppViewModel(context: Context) {
             presetId = AppGraph.PRESET_ID,
         )
         return JsonlSessionLog(File(app.filesDir, "sessions"), header, graph.clock)
+    }
+
+    /** Resolve the shell (self-test exec) and read its version banner; cheap, runs once. */
+    private fun readShellInfo(): ShellInfo = runCatching {
+        val bin = Userland.resolveShell(app)
+        if (bin.kind == ShellKind.BASH) {
+            val first = Userland.execDirect(listOf(bin.chosen.absolutePath, "--version"))
+                .out.lineSequence().firstOrNull().orEmpty()
+            val short = first.substringAfter("version ", "").substringBefore(" ")
+            ShellInfo(
+                title = "GNU bash" + if (short.isNotEmpty()) " $short" else "",
+                detail = bin.chosen.absolutePath,
+            )
+        } else {
+            ShellInfo(title = "Platform shell (mksh + toybox)", detail = bin.chosen.absolutePath)
+        }
+    }.getOrElse { t ->
+        ShellInfo(title = "Unavailable", detail = t.message ?: t::class.simpleName.orEmpty())
     }
 
     private fun refreshThreads() {
