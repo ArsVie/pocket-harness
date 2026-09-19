@@ -1,7 +1,8 @@
 # PocketHarness
 
 A coding agent that runs on your phone. Real shell (bundled GNU bash 5.3), real files, a real
-model over an OpenAI-compatible endpoint — presented as messaging threads in 2010-era Android chrome.
+model over an OpenAI-compatible endpoint — presented as messaging threads in a soft pastel light
+theme (v2; the 2010-era chrome of v1 was superseded — ADR-007).
 
 It is deliberately small. Two tools, a one-sentence system prompt, a linear loop, and the session
 transcript as the durable object. The design is the result of a research pass over [Pi][pi], the
@@ -39,6 +40,7 @@ Decisions and their reasoning:
 | [0004](planning/decisions/0004-execution-modes.md) | DEFAULT/YOLO switch beneath a frozen floor |
 | [0005](planning/decisions/0005-app-shell.md) | Three screens, thread queue, foreground ownership of a turn |
 | [0006](planning/decisions/0006-shell-userland-bash.md) | GNU bash 5.3 built for Android ships as the userland; the platform shell is the runtime fallback |
+| [0007](planning/decisions/0007-app-shell-v2-ui.md) | Pastel light UI, push navigation, inline approvals — supersedes the 2010-era chrome (ADR-005 §1) |
 
 `planning/ENVIRONMENT.md` records what the platform actually permits, measured rather than assumed —
 including the finding that Android's seccomp filter on the app process blocks a static (musl) busybox
@@ -121,6 +123,9 @@ before publishing anything.
 - `bash` and `str_replace_editor`, output clipping with spill-to-file, exit codes, timeouts.
 - Per-folder trust gate in DEFAULT mode with an approval prompt; YOLO skips the gate; the policy floor
   applies in both.
+- **A v2 phone UI** (ADR-007): pastel light theme; real navigation (threads → thread → settings);
+  lazy thread view with bottom auto-follow; collapsible thinking/tool blocks with status squares;
+  inline permission card; a composer that morphs Send ↔ Stop; honest empty/error states.
 - Sessions as append-only JSONL: resume, replay, torn-tail repair, rebuildable index.
 - Steer mid-turn (queued, delivered at the next step boundary), Stop, and a stuck-call warning.
 - Tool descriptions rewritten for the device the model is actually on — no `apt`, and the toybox gaps are stated rather than assumed.

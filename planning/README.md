@@ -1,7 +1,7 @@
 # planning/
 
 Working notes, research, and decision records for PocketHarness — an Android coding harness with an OpenAI-compatible
-model layer, a 2010-era Android settings aesthetic, sessions presented as messaging threads, and a deliberately minimal
+model layer, a soft pastel light UI (ADR-007 superseded the v1 chrome), sessions presented as messaging threads, and a deliberately minimal
 tool/harness surface in the manner of Pi and the DeepSeek harness's `minimal` preset.
 
 ## Provenance convention

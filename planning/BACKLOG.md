@@ -69,7 +69,8 @@ Remove or gate before any release build:
 - `ExecProbe` — ~~writes `files/exec-probe.txt` on every launch~~ **gated in v2**: it runs only when
   `files/run-probe` exists. Still debug scaffolding; its sections now cover the bash experiments
   (ADR-006). Keep the trigger discipline for release builds.
-- `ui/Fixtures.kt` — dead once the screens read real state.
+- `ui/Fixtures.kt` — dead: the v2 screens read real state (ADR-007). The file is unreferenced now;
+  delete it with the next `:app` change.
 
 ## B-4 — `:core` seams that the app should not be re-implementing
 
@@ -118,6 +119,21 @@ tested, but no live turn has exercised either. Cheap to check on a slow turn.
 
 ---
 
+## B-11 — After an approval, the denied call itself is never retried
+
+The dispatcher denies a call whose cwd is untrusted (`"…is not trusted; approve this folder first"`),
+the loop interrupts the turn, the user taps Allow, trust is persisted to `files/trust.json`, and the
+turn resumes — but the denied call is dead: the model only ever saw the error, never learns the folder
+was approved, and improvises elsewhere. Observed live (v2 UI session, `session-4a8becbb`): after
+Allow it re-ran the command under `/tmp`, which was already trusted, instead of the just-approved
+folder.
+
+**To do:** on Allow, either re-run the denied call, or append a synthetic note (folder `<cwd>` is now
+trusted) before resuming. Cheap; verify on a live turn. Evidence: the `session-4a8becbb` transcript
+on the emulator, `review/ui-after/07-…` and `11-…` screenshots.
+
+---
+
 ## Resolved (kept here so they are not re-litigated)
 
 - **W^X / `targetSdk 28`** — resolved; exec of app-data files works. See `ENVIRONMENT.md`.
@@ -134,3 +150,6 @@ tested, but no live turn has exercised either. Cheap to check on a slow turn.
   at runtime; the platform shell is the fallback. `0006-shell-userland-bash.md`, ENVIRONMENT.md.
 - **getcwd stderr noise** (v2) — fixed at configure (`bash_cv_getcwd_malloc=yes`), not with an
   `export PWD` band-aid. `0006-shell-userland-bash.md`.
+- **UI v1 chrome** (v2) — the 2010-era settings chrome and the always-on tab strip were superseded
+  by the pastel light theme and push navigation. `0007-app-shell-v2-ui.md`; before/after screenshots
+  under `review/`.
