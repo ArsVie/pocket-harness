@@ -315,6 +315,31 @@ class DefaultThreadProjectorTest {
     }
 
     @Test
+    fun `a SessionTitle event overrides the first user message as the thread title`() {
+        val open = project(
+            listOf(
+                user(0, "original topic"),
+                SessionEvent.SessionTitle(seq = 1, time = 0, title = "  Renamed thread  "),
+            ),
+        )
+        assertEquals("Renamed thread", open.title)
+
+        val latest = project(
+            listOf(
+                user(0, "original"),
+                SessionEvent.SessionTitle(seq = 1, time = 0, title = "first rename"),
+                SessionEvent.SessionTitle(seq = 2, time = 0, title = "second rename"),
+            ),
+        )
+        assertEquals("second rename", latest.title)
+
+        val blankFallsBack = project(
+            listOf(user(0, "fallback"), SessionEvent.SessionTitle(seq = 1, time = 0, title = "   ")),
+        )
+        assertEquals("fallback", blankFallsBack.title)
+    }
+
+    @Test
     fun `mode and id are passed through unchanged`() {
         val open = project(listOf(user(0, "hi")), mode = ExecutionMode.YOLO)
         assertEquals(ExecutionMode.YOLO, open.mode)

@@ -102,6 +102,10 @@ private fun PocketHarnessApp(vm: AppViewModel) {
                 screen = Screen.Session
             },
             onOpenSettings = { screen = Screen.Settings },
+            onRename = { id, title -> vm.renameSession(id, title) },
+            onPin = { id, pinned -> vm.setPinned(id, pinned) },
+            onMove = { id, up -> vm.moveSession(id, up) },
+            onDelete = { id -> vm.deleteSession(id) },
         )
 
         Screen.Session -> SessionScreen(

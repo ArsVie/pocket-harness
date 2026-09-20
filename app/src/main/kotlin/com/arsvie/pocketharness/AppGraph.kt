@@ -5,6 +5,7 @@ import android.util.Log
 import com.arsvie.pocketharness.platform.AndroidSecretStore
 import com.arsvie.pocketharness.platform.AndroidShell
 import com.arsvie.pocketharness.platform.AndroidShellBinaries
+import com.arsvie.pocketharness.platform.FileSessionUiStore
 import com.arsvie.pocketharness.platform.FileTrustStore
 import com.arsvie.pocketharness.platform.Userland
 import okhttp3.OkHttpClient
@@ -105,6 +106,7 @@ class AppGraph(private val context: Context) {
     }
 
     val sessionStore = FileSessionStore(File(context.filesDir, "sessions"), clock)
+    val sessionUiStore = FileSessionUiStore(File(context.filesDir, "session-ui.json"))
     val trustStore = FileTrustStore(File(context.filesDir, "trust.json"))
     val secrets = AndroidSecretStore(context)
     val settingsStore = AndroidSettingsStore(context)
@@ -170,9 +172,11 @@ class AppGraph(private val context: Context) {
         runner = LinearAgentRunner(client, DefaultPromptAssembler(), dispatcher, clock)
     }
 
-    /** `filesDir/workspace/<session-id>/`, created on first use. Blocking, call off the main thread. */
-    fun workspaceFor(sessionId: String): File =
-        File(File(context.filesDir, WORKSPACE_DIR_NAME), sessionId).apply { mkdirs() }
+    /** `filesDir/workspace/<session-id>/` — the default per-session cwd, without creating it. */
+    fun workspacePath(sessionId: String): File = File(File(context.filesDir, WORKSPACE_DIR_NAME), sessionId)
+
+    /** The default workspace, created on first use. Blocking, call off the main thread. */
+    fun workspaceFor(sessionId: String): File = workspacePath(sessionId).apply { mkdirs() }
 
     fun hasApiKey(): Boolean = !secrets.get(API_KEY_REF).isNullOrBlank()
 

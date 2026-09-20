@@ -27,6 +27,7 @@ object Fixtures {
                 title = "Why is uname slow on this emulator",
                 subtitle = "assistant · running",
                 updatedAt = 1_755_990_000_000,
+                pinned = true,
             ),
             ThreadRow(
                 id = "s-0003",

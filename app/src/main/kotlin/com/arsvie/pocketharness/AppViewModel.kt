@@ -217,6 +217,89 @@ class AppViewModel(context: Context) {
         }
     }
 
+    // ---- session management (B-15) ---------------------------------------------------------------
+
+    /** Renames the session: appends a [SessionEvent.SessionTitle], the newest of which wins. */
+    fun renameSession(id: String, title: String) {
+        val clean = title.trim().take(TITLE_MAX_CHARS)
+        if (clean.isEmpty()) return
+        scope.launch {
+            ensureReady()
+            val event = SessionEvent.SessionTitle(seq = 0, time = 0, title = clean)
+            val current = session
+            if (current != null && current.header.id == id) {
+                current.append(event)
+            } else {
+                val opened = graph.sessionStore.open(id)
+                try {
+                    opened.append(event)
+                } finally {
+                    opened.close()
+                }
+            }
+            refreshThreads()
+            publish()
+        }
+    }
+
+    fun setPinned(id: String, pinned: Boolean) {
+        scope.launch {
+            graph.sessionUiStore.setPinned(id, pinned)
+            refreshThreads()
+            publish()
+        }
+    }
+
+    fun moveSession(id: String, up: Boolean) {
+        scope.launch {
+            graph.sessionUiStore.move(id, up)
+            refreshThreads()
+            publish()
+        }
+    }
+
+    /**
+     * Deletes a session into the app's trash (B-15). A running turn blocks its own session's delete.
+     * The default per-session workspace moves to the trash with it; a custom folder is left alone.
+     */
+    fun deleteSession(id: String) {
+        scope.launch {
+            ensureReady()
+            val current = session
+            if (current != null && current.header.id == id) {
+                if (running) return@launch
+                runCatching { current.close() }
+                session = null
+            }
+            val cwd = runCatching { graph.sessionStore.open(id) }.getOrNull()?.let { opened ->
+                try {
+                    opened.header.cwd
+                } finally {
+                    opened.close()
+                }
+            }
+            graph.sessionStore.delete(id)
+            graph.sessionUiStore.forget(id)
+            if (cwd != null && cwd == graph.workspacePath(id).absolutePath) {
+                trashWorkspace(id)
+            }
+            refreshThreads()
+            publish()
+        }
+    }
+
+    private fun trashWorkspace(id: String) {
+        val source = graph.workspacePath(id)
+        if (!source.isDirectory) return
+        val trash = File(app.filesDir, TRASH_WORKSPACES_DIR)
+        trash.mkdirs()
+        val target = File(trash, graph.clock.nowMillis().toString() + "-" + id)
+        if (!source.renameTo(target)) {
+            source.copyRecursively(target, overwrite = true)
+            source.deleteRecursively()
+        }
+    }
+
     // ---- the turn ------------------------------------------------------------------------------
 
     private fun startTurn() {
@@ -321,14 +404,24 @@ class AppViewModel(context: Context) {
     }
 
     private fun refreshThreads() {
-        threads = graph.sessionStore.list().map { summary ->
-            ThreadRow(
-                id = summary.id,
-                title = summary.title,
-                subtitle = "${summary.lastSeq} events · " + summary.cwd,
-                updatedAt = summary.updatedAt,
-            )
-        }
+        val summaries = graph.sessionStore.list()
+        val uiStore = graph.sessionUiStore
+        uiStore.reconcile(summaries.map { it.id })
+        val pins = uiStore.pinnedIds()
+        val rank = uiStore.orderedIds().withIndex().associate { (index, id) -> id to index }
+        // B-15 display rule: pinned sessions first, then the rest; inside a block the manual order —
+        // new sessions land on top of their block (reconcile prepends unknown ids).
+        threads = summaries
+            .sortedWith(compareBy({ it.id !in pins }, { rank[it.id] ?: Int.MAX_VALUE }))
+            .map { summary ->
+                ThreadRow(
+                    id = summary.id,
+                    title = summary.title,
+                    subtitle = "${summary.lastSeq} events · " + summary.cwd,
+                    updatedAt = summary.updatedAt,
+                    pinned = summary.id in pins,
+                )
+            }
     }
 
     private fun publish() {
@@ -361,6 +454,12 @@ class AppViewModel(context: Context) {
     private companion object {
         const val THREAD_NAME = "ph-app"
         const val SESSION_ID_PREFIX = "session-"
+
+        /** Mirrors the store's inbox title rule (`FileSessionStore.TITLE_MAX_CHARS`). */
+        const val TITLE_MAX_CHARS = 60
+
+        /** B-15 delete: default per-session workspaces move under `filesDir/trash/workspaces/`. */
+        const val TRASH_WORKSPACES_DIR = "trash/workspaces"
         const val PREFS_NAME = "ph_ui"
         const val KEY_THEME = "theme"
     }

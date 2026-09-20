@@ -27,8 +27,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -98,9 +102,15 @@ fun SessionsScreen(
     onOpen: (String) -> Unit,
     onNew: () -> Unit,
     onOpenSettings: () -> Unit,
+    onRename: (String, String) -> Unit,
+    onPin: (String, Boolean) -> Unit,
+    onMove: (String, Boolean) -> Unit,
+    onDelete: (String) -> Unit,
 ) {
     val t = LocalPhTheme.current
     val c = t.colors
+    var renaming by remember { mutableStateOf<ThreadRow?>(null) }
+    var pendingDelete by remember { mutableStateOf<ThreadRow?>(null) }
     Column(modifier = Modifier.fillMaxSize().background(c.bg)) {
         PhBar(
             title = "Sessions",
@@ -131,19 +141,107 @@ fun SessionsScreen(
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 32.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(sessions, key = { it.id }) { row -> SessionRow(row, onOpen) }
+                    items(sessions, key = { it.id }) { row ->
+                        SessionRow(
+                            row = row,
+                            onOpen = onOpen,
+                            onRename = { renaming = it },
+                            onPin = onPin,
+                            onMove = onMove,
+                            onDelete = { pendingDelete = it },
+                        )
+                    }
                 }
             }
         }
     }
+
+    renaming?.let { row ->
+        var draft by remember(row.id) { mutableStateOf(row.title) }
+        AlertDialog(
+            onDismissRequest = { renaming = null },
+            containerColor = c.surface,
+            shape = RoundedCornerShape(t.shape.card),
+            title = {
+                Text("Rename session", color = c.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            },
+            text = {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = c.text,
+                        unfocusedTextColor = c.text,
+                        cursorColor = c.accent,
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onRename(row.id, draft)
+                    renaming = null
+                }) { Text("Save", color = c.accent) }
+            },
+            dismissButton = {
+                TextButton(onClick = { renaming = null }) { Text("Cancel", color = c.textDim) }
+            },
+        )
+    }
+
+    pendingDelete?.let { row ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            containerColor = c.surface,
+            shape = RoundedCornerShape(t.shape.card),
+            title = {
+                Text("Delete session?", color = c.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            },
+            text = {
+                Text(
+                    "\u201C${row.title}\u201D moves to the app's trash. Its sandbox folder goes with it; " +
+                        "a custom workspace folder is left untouched.",
+                    color = c.textDim,
+                    fontSize = 13.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDelete(row.id)
+                    pendingDelete = null
+                }) { Text("Delete", color = c.warn) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("Cancel", color = c.textDim) }
+            },
+        )
+    }
 }
 
 @Composable
-private fun SessionRow(row: ThreadRow, onOpen: (String) -> Unit) {
+private fun SessionRow(
+    row: ThreadRow,
+    onOpen: (String) -> Unit,
+    onRename: (ThreadRow) -> Unit,
+    onPin: (String, Boolean) -> Unit,
+    onMove: (String, Boolean) -> Unit,
+    onDelete: (ThreadRow) -> Unit,
+) {
     val t = LocalPhTheme.current
     val c = t.colors
+    var menuOpen by remember { mutableStateOf(false) }
     PhCard(onClick = { onOpen(row.id) }) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            if (row.pinned) {
+                Icon(
+                    Icons.Default.Star,
+                    contentDescription = "Pinned",
+                    tint = c.accent,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(7.dp))
+            }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     row.title,
@@ -164,7 +262,50 @@ private fun SessionRow(row: ThreadRow, onOpen: (String) -> Unit) {
             }
             Spacer(Modifier.width(10.dp))
             Text(relativeTime(row.updatedAt), color = c.textFaint, fontSize = t.type.meta)
-            Spacer(Modifier.width(2.dp))
+            Box {
+                PhIconAction(Icons.Default.MoreVert, "Session actions", { menuOpen = true })
+                DropdownMenu(
+                    expanded = menuOpen,
+                    onDismissRequest = { menuOpen = false },
+                    containerColor = c.surface,
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Rename…", color = c.text) },
+                        onClick = {
+                            menuOpen = false
+                            onRename(row)
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (row.pinned) "Unpin" else "Pin to top", color = c.text) },
+                        onClick = {
+                            menuOpen = false
+                            onPin(row.id, !row.pinned)
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Move up", color = c.text) },
+                        onClick = {
+                            menuOpen = false
+                            onMove(row.id, true)
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Move down", color = c.text) },
+                        onClick = {
+                            menuOpen = false
+                            onMove(row.id, false)
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Delete…", color = c.warn) },
+                        onClick = {
+                            menuOpen = false
+                            onDelete(row)
+                        },
+                    )
+                }
+            }
             Icon(
                 Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = null,

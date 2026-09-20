@@ -109,17 +109,39 @@ class FileSessionStoreTest {
     }
 
     @Test
-    fun `delete removes the directory and a missing id is not an error`() {
+    fun `delete moves the session to the trash and a missing id is not an error`() {
         val store = FileSessionStore(root, clock)
         val session = store.create("/ws", "minimal")
+        session.append(SessionEvent.UserMessage(0, 0, "keep me in the trash"))
+        session.close()
         assertTrue(File(root, session.header.id).isDirectory)
 
         store.delete(session.header.id)
         assertFalse(File(root, session.header.id).exists())
         assertTrue(store.list().isEmpty())
 
+        val trash = File(root.parentFile, "trash/sessions")
+        val moved = trash.listFiles().orEmpty().filter { it.name.endsWith("-" + session.header.id) }
+        assertEquals(1, moved.size)
+        assertTrue(File(moved.single(), JsonlSessionLog.SESSION_FILE_NAME).isFile)
+
         store.delete("never-existed")
         assertTrue(store.list().isEmpty())
+    }
+
+    @Test
+    fun `a manual title outranks the first user message in the inbox row`() {
+        val store = FileSessionStore(root, clock)
+        val session = store.create("/ws", "minimal")
+        session.append(SessionEvent.UserMessage(0, 0, "hello from the user"))
+        session.append(SessionEvent.SessionTitle(0, 0, "  My renamed session  "))
+        assertEquals("My renamed session", store.list().single().title)
+
+        session.append(SessionEvent.SessionTitle(0, 0, "newest rename wins"))
+        assertEquals("newest rename wins", store.list().single().title)
+
+        session.append(SessionEvent.SessionTitle(0, 0, "   "))
+        assertEquals("newest rename wins", store.list().single().title)
     }
 
     @Test
