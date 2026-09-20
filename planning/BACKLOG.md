@@ -7,6 +7,10 @@ none of it blocks the current PoC. Ordered by what would bite first.
 
 ## B-1 — Foreground service can crash the app on a fast-failing turn
 
+**Owner, 2026-09-19 — next workstream.** A turn must survive backgrounding and screen-off; this is
+the priority fix on `beta`. Scope: land options 1–3 below, confirm a long tool turn lives through
+background/doze on the Redmi, and land B-12 (battery-optimization warning) alongside it.
+
 **Severity: high when it fires** (the app dies mid-turn), but it is not deterministic, and a normal
 turn is unaffected.
 
@@ -41,6 +45,10 @@ past the deadline (the app does provisioning work — asset unpack, shell self-t
 4. Also worth measuring: whether `foregroundServiceType="dataSync"` is the right type (Android 16
    enforces declared types more strictly), and whether the notification needs
    `POST_NOTIFICATIONS` handling on 13+.
+
+**Acceptance:** a long tool turn survives backgrounding, screen-off and the app switcher; no
+`ForegroundServiceDidNotStartInTimeException` on fast-failing turns. Verified on the emulator *and*
+the Redmi.
 
 **Reproduce:** force the endpoint to fail fast (point the route at a closed port) and send a message;
 compare with a healthy endpoint. Evidence lands in `files/sessions/<id>/session.jsonl` plus
@@ -134,6 +142,47 @@ on the emulator, `review/ui-after/07-…` and `11-…` screenshots.
 
 ---
 
+## B-12 — Battery optimization kills background turns silently
+
+The owner's phone is a Redmi (MIUI/HyperOS): aggressive battery management restricts background CPU
+and can kill the foreground service outright. Nothing in the app says so today — a turn that dies in
+the background reads as the app's own bug. (This reverses the mid-build cut recorded under
+"Resolved": the foreground service keeps a turn alive, and battery exemption is what keeps the
+*service* alive. Owner brought it back, 2026-09-19.)
+
+**To do:**
+1. Detect: `PowerManager.isIgnoringBatteryOptimizations(pkg)`; also `isPowerSaveMode` and, on 13+,
+   the `POST_NOTIFICATIONS` state.
+2. Surface: a warning card in the thread plus a Diagnostics row whenever the app is not exempt —
+   "Battery optimization is on. Turns may be killed in the background."
+3. Act: the card's button opens this app's battery page —
+   `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` with `package:` data (fine for sideload; Play would
+   object), falling back to `ACTION_APPLICATION_DETAILS_SETTINGS`; if neither lands on the right page,
+   print the path: Settings → Apps → PocketHarness → Battery → Unrestricted. MIUI extras: the
+   Autostart toggle, and locking the app in Recents.
+4. Re-check on resume; hide the card once exempt.
+
+**Acceptance:** with the card gone (app exempt), a backgrounded long turn survives on the Redmi.
+
+---
+
+## Candidates — asked for on 2026-09-19, not yet ordered
+
+- **Streaming replies.** Turns arrive whole; a max-effort turn is minutes of "running" with no text
+  arriving. SSE (`stream: true`) with the same budgets, deltas rendered into the reply block.
+  Biggest perceived win per line of code; touches `OpenAiClient`, the projector, and the thread block.
+- **Notification with Stop.** Once B-1 lands, the service notification should carry Stop and a
+  "turn finished" ping — the glanceable surface for an agent that runs in the background.
+- **Session hygiene.** Rename, delete, and export a session (markdown or the raw JSONL) — a phone
+  tool that keeps transcripts should let them be shipped off the device.
+- **Trust-list management.** `files/trust.json` only ever grows; Settings needs the list with revoke.
+- **Connection test + first-run setup.** A "test" button in Settings (GET /models) and a first-run
+  prompt for base URL / model / key, so the three-field ritual cannot be typo'd into a mystery failure.
+- **Release hygiene.** The debug APK is 34 MB; R8 + per-ABI splits should halve it, and a release
+  signing key would make `assembleRelease` the artifact of record instead of debug.
+
+---
+
 ## Resolved (kept here so they are not re-litigated)
 
 - **W^X / `targetSdk 28`** — resolved; exec of app-data files works. See `ENVIRONMENT.md`.
@@ -145,7 +194,7 @@ on the emulator, `review/ui-after/07-…` and `11-…` screenshots.
 - **Emulator ↔ mock reachability** — `http://10.0.2.2:8111` works (WSL2 mirrored networking);
   `adb reverse` does not reach WSL. `PLAN.md`.
 - **Battery-optimization disclaimer** — cut by the owner mid-build; the foreground service is what
-  keeps a turn alive. `0005-app-shell.md` §6.
+  keeps a turn alive. `0005-app-shell.md` §6. *(Reversed 2026-09-19 — see B-12.)*
 - **bash userland** (v2) — GNU bash 5.3 built with the NDK ships as per-ABI assets and is preferred
   at runtime; the platform shell is the fallback. `0006-shell-userland-bash.md`, ENVIRONMENT.md.
 - **getcwd stderr noise** (v2) — fixed at configure (`bash_cv_getcwd_malloc=yes`), not with an
