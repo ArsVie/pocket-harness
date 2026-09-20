@@ -9,4 +9,17 @@
     <string name="turn_channel_description">Shown while a harness turn is running, so it survives backgrounding.</string>
     <string name="turn_notification_title">PocketHarness</string>
     <string name="turn_notification_text">Turn running</string>
+
+    <!-- B-14 E1: the ongoing notification's one action. Forwarded to the turn, never answered here:
+         on a locked screen Stop ends the turn and nothing else. -->
+    <string name="turn_action_stop">Stop</string>
+
+    <!-- B-14 E2/E5: the turn-finished ping. Its own channel (IMPORTANCE_DEFAULT — it is allowed to
+         alert, unlike the status), id 2, cancelled when the next turn starts. Fixed, outcome-aware
+         copy only: no session id, no command, no model output. -->
+    <string name="turn_done_channel_id">ph_turn_done</string>
+    <string name="turn_done_channel_name">Finished turns</string>
+    <string name="turn_done_channel_description">Tells you a turn ended while the app was in the background. Tap to return to the thread.</string>
+    <string name="turn_finished_notification_text">Turn finished</string>
+    <string name="turn_failed_notification_text">Turn failed</string>
 </resources>

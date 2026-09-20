@@ -1,11 +1,14 @@
 package com.arsvie.pocketharness
 
+import android.Manifest
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
@@ -70,6 +73,21 @@ class MainActivity : ComponentActivity() {
         viewModel.refreshBattery()
     }
 
+    /**
+     * B-14 E2: the app is on screen, so a turn that ends now needs no ping — the thread is showing
+     * the outcome. [AppForeground] is read by the turn's `finally` block on the app's dispatcher.
+     */
+    override fun onStart() {
+        super.onStart()
+        AppForeground.visible = true
+    }
+
+    /** B-14 E2: Home, the launcher, or the screen going off — the ping's cue. */
+    override fun onStop() {
+        AppForeground.visible = false
+        super.onStop()
+    }
+
     private companion object {
         const val TAG = "PocketHarness"
     }
@@ -87,6 +105,12 @@ private fun PocketHarnessApp(vm: AppViewModel) {
     val ui = vm.ui
     var screen by remember { mutableStateOf<Screen>(Screen.Sessions) }
     val backToSessions: () -> Unit = { screen = Screen.Sessions }
+
+    // B-14 E3: the Diagnostics row requests POST_NOTIFICATIONS at runtime. Either answer re-reads
+    // the status, so the row (and the B-12 battery line above it) shows what the system now says.
+    val notificationsPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { vm.refreshBattery() }
 
     BackHandler(enabled = screen != Screen.Sessions) { backToSessions() }
 
@@ -134,6 +158,10 @@ private fun PocketHarnessApp(vm: AppViewModel) {
                 onModeChange = { mode -> vm.changeMode(mode) },
                 onEdit = { field, value -> vm.editSetting(field, value) },
                 onOpenBattery = { vm.openBatterySettings() },
+                onRequestNotifications = {
+                    notificationsPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                },
+                onOpenNotificationSettings = { vm.openNotificationSettings() },
             )
         } ?: Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(text = "Loading…")

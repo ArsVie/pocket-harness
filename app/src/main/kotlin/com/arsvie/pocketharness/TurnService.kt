@@ -1,11 +1,14 @@
 package com.arsvie.pocketharness
 
 import android.app.Notification
+import android.app.Notification.Action
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.graphics.drawable.Icon
 import android.os.IBinder
 import android.util.Log
 
@@ -22,7 +25,16 @@ import android.util.Log
  * starting another.
  *
  * The notification is honest and minimal: the app label and a fixed string from `strings.xml`.
- * No session id, no command, no model output, no transcript content, no secrets.
+ * No session id, no command, no model output, no transcript content, no secrets — plus, since
+ * BACKLOG B-14 E1, one **Stop** action. Stop is the one thing this service does with what it
+ * receives: it forwards the action to the process-scoped [TurnControl] (installed by
+ * [AppViewModel]) and does nothing else with it, so the "no turn state, no work of its own" rule
+ * still holds. That forwarding is also why a Stop from the lock screen aborts the turn without the
+ * notification having to know anything about turns.
+ *
+ * The service never posts anything else. The turn-finished ping is a plain `NotificationManager`
+ * post on id 2 ([TurnNotifications]) — not a lifecycle event here, so it cannot resurrect the
+ * service or perturb the handshake below (B-14, E2).
  *
  * ## Start/stop ordering (BACKLOG B-1)
  *
@@ -48,6 +60,15 @@ class TurnService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // B-14 E1: the notification's Stop action. It is forwarded to the process-scoped control and
+        // that is the whole handler — this service still holds no turn state and does no work of its
+        // own. Note what this path does *not* do: no startForeground, no touch of
+        // wanted/foregroundReached (BACKLOG B-1). A stop is not a service generation, so it cannot
+        // create the obligation the protocol exists to keep track of.
+        if (intent?.action == ACTION_STOP) {
+            if (!TurnControl.stop()) Log.w(TAG, "stop action with no turn control installed")
+            return START_NOT_STICKY
+        }
         // Must happen within a few seconds of startForegroundService, or the system kills the app.
         startForeground(NOTIFICATION_ID, buildNotification())
         // A stop that raced this start (a turn that failed fast) is honoured only now, never before
@@ -78,13 +99,42 @@ class TurnService : Service() {
             .setContentText(getString(R.string.turn_notification_text))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            // B-14 E1: the one affordance. Same icon as the status: this is still the turn.
+            .addAction(
+                Action.Builder(
+                    Icon.createWithResource(this, R.drawable.ic_stat_turn),
+                    getString(R.string.turn_action_stop),
+                    stopAction(),
+                ).build(),
+            )
             .build()
     }
+
+    /**
+     * `getService`, not `getActivity`: the action has to reach the process's turn whatever screen is
+     * up — including a locked one. The service it names is already running (this notification only
+     * exists while it is foreground), so delivery starts nothing and the B-1 handshake is untouched.
+     */
+    private fun stopAction(): PendingIntent = PendingIntent.getService(
+        this,
+        REQUEST_STOP,
+        Intent(this, TurnService::class.java).setAction(ACTION_STOP),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
 
     companion object {
         /** ADR-005 §5: one turn at a time, so one fixed notification id. */
         private const val NOTIFICATION_ID = 1
         private const val TAG = "PocketHarness"
+
+        /**
+         * B-14 E1: what the notification's Stop action carries. Private: the only sender is the
+         * action's own [PendingIntent], and nothing outside this service may pretend to be it.
+         */
+        private const val ACTION_STOP = "com.arsvie.pocketharness.action.TURN_STOP"
+
+        /** The action's request code within this app (the ping has its own, id 2's). */
+        private const val REQUEST_STOP = 1
 
         /** Guards [wanted] and [foregroundReached]. See the class comment (B-1). */
         private val lock = Any()

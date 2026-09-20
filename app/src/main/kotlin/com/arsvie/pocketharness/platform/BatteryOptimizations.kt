@@ -60,6 +60,19 @@ object BatteryOptimizations {
         return tryStart(context, details)
     }
 
+    /**
+     * Opens this app's notification page (B-14 E3). `ACTION_APP_NOTIFICATION_SETTINGS` resolves on
+     * every API this app supports; app details is the second try, so the row's manual path is only
+     * ever the last resort.
+     */
+    fun openNotificationSettings(context: Context): Boolean {
+        val page = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (tryStart(context, page)) return true
+        return openSettings(context)
+    }
+
     private fun tryStart(context: Context, intent: Intent): Boolean =
         runCatching { context.startActivity(intent) }.isSuccess
 }

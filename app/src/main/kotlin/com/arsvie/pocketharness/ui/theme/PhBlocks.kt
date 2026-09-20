@@ -522,9 +522,21 @@ private fun ApprovalBody(prompt: ApprovalPrompt) {
     }
 }
 
-/** Composer: text field + one slot that morphs Send <-> Stop. */
+/**
+ * Composer: text field + one slot that morphs Send <-> Stop.
+ *
+ * [running] drives the *send* semantics (a turn is live, so text steers it); [stoppable] decides
+ * whether the slot is the Stop button. They differ in exactly one place: while an approval prompt is
+ * pending the turn is no longer running, but the prompt still belongs to it — and the owner needs a
+ * way to end that turn from the thread (B-14 E4), not a second Send.
+ */
 @Composable
-fun PhComposer(running: Boolean, onSend: (String) -> Unit, onStop: () -> Unit) {
+fun PhComposer(
+    running: Boolean,
+    onSend: (String) -> Unit,
+    onStop: () -> Unit,
+    stoppable: Boolean = running,
+) {
     var draft by remember { mutableStateOf("") }
     val t = LocalPhTheme.current
     val c = t.colors
@@ -580,20 +592,20 @@ fun PhComposer(running: Boolean, onSend: (String) -> Unit, onStop: () -> Unit) {
             Spacer(Modifier.width(8.dp))
             val send = { if (draft.isNotBlank()) { onSend(draft); draft = "" } }
             when (t.button) {
-                PhButton.GLOSS -> if (running) {
+                PhButton.GLOSS -> if (stoppable) {
                     PhButton("Stop", onStop, danger = true)
                 } else {
                     PhButton("Send", send, primary = true, enabled = draft.isNotBlank())
                 }
 
-                PhButton.BOARD -> if (running) {
+                PhButton.BOARD -> if (stoppable) {
                     PhButton("Stop", onStop, danger = true)
                 } else {
                     PhButton("Post", send, primary = true, enabled = draft.isNotBlank())
                 }
 
                 PhButton.SOLID -> RoundAction(
-                    running = running,
+                    running = stoppable,
                     enabled = draft.isNotBlank(),
                     radius = 10.dp,
                     idleColor = c.accent,
@@ -602,7 +614,7 @@ fun PhComposer(running: Boolean, onSend: (String) -> Unit, onStop: () -> Unit) {
                 )
 
                 PhButton.SOFT -> RoundAction(
-                    running = running,
+                    running = stoppable,
                     enabled = draft.isNotBlank(),
                     radius = 22.dp,
                     idleColor = c.accent,

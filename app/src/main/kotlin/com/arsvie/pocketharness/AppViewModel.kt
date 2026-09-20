@@ -112,6 +112,13 @@ class AppViewModel(context: Context) {
     /** Opens this app's battery page; false when nothing resolved (card shows the manual path). */
     fun openBatterySettings(): Boolean = BatteryOptimizations.openSettings(app)
 
+    /**
+     * Opens this app's notification page (B-14 E3); false when nothing resolved either. The runtime
+     * request in Settings → Diagnostics is the primary path — this is the way out when the request
+     * cannot be shown or was already denied.
+     */
+    fun openNotificationSettings(): Boolean = BatteryOptimizations.openNotificationSettings(app)
+
     private var threads: List<ThreadRow> = emptyList()
     private var settingsRow: SettingsState? = null
     private var session: Session? = null
@@ -135,7 +142,20 @@ class AppViewModel(context: Context) {
     private var runJob: Job? = null
     private var mode: ExecutionMode = graph.settings.mode
 
+    /**
+     * B-14 E4: set once the owner has stopped the turn (composer or notification), and cleared with
+     * `live` when the next turn starts. A pending approval prompt is an affordance of the turn that
+     * asked for it, so from here on it is kept out of the published state — including a
+     * [LoopEvent.ApprovalNeeded] the runner emits *on its way out*, which is the case a one-shot
+     * "drop the event now" would miss: a tool call already in flight can still come back denied and
+     * ask, long after Stop was pressed.
+     */
+    private var approvalAbandoned = false
+
     init {
+        // B-14 E1: the notification's Stop action reaches the turn through this process-scoped seam
+        // and nowhere else. The service stays stateless; the newest install wins.
+        TurnControl.install { stop() }
         scope.launch {
             try {
                 graph.prepare()
@@ -178,7 +198,7 @@ class AppViewModel(context: Context) {
             pendingApproval = null,
             mode = mode,
         )
-        live.clear()
+        clearLive()
         pendingSteer.clear()
         session = null
         publish()
@@ -212,7 +232,7 @@ class AppViewModel(context: Context) {
         loadTarget = id
         transientOpen = null
         threadLoading = true
-        live.clear()
+        clearLive()
         pendingSteer.clear()
         session = null
         publish()
@@ -244,8 +264,20 @@ class AppViewModel(context: Context) {
         }
     }
 
+    /**
+     * Ends the running turn. Two callers, both on the main thread: the composer, and the
+     * notification's Stop action (B-14 E1, through [TurnControl]). Neither touches turn state here —
+     * the runner's abort flag is volatile by design, and everything else (the E4 drop of a pending
+     * approval included) happens on the app's single dispatcher, where all the other state lives.
+     */
     fun stop() {
         graph.runner.stop()
+        scope.launch {
+            // B-14 E4: a stopped turn's approval prompt is moot — nothing is answered from the shade,
+            // and the turn is over. `publish` is where that decision becomes unmissable.
+            approvalAbandoned = true
+            publish()
+        }
     }
 
     fun changeMode(newMode: ExecutionMode) {
@@ -290,14 +322,14 @@ class AppViewModel(context: Context) {
                 current.append(
                     SessionEvent.ApprovalDecided(seq = 0, time = 0, cwd = prompt.cwd, granted = true),
                 )
-                live.clear()
+                clearLive()
                 publish()
                 startTurn()
             } else {
                 current.append(
                     SessionEvent.ApprovalDecided(seq = 0, time = 0, cwd = prompt.cwd, granted = false),
                 )
-                live.clear()
+                clearLive()
                 publish()
             }
         }
@@ -399,8 +431,10 @@ class AppViewModel(context: Context) {
         val current = session ?: return
         runJob?.cancel()
         runJob = scope.launch {
-            live.clear()
+            clearLive()
             running = true
+            // B-14 E2: the previous turn's ping is stale the moment a new turn starts.
+            TurnNotifications.cancelFinished(app)
             // ADR-005 §5: foreground for the whole turn, so Home / screen-off cannot freeze us.
             TurnService.start(app)
             publish()
@@ -416,6 +450,14 @@ class AppViewModel(context: Context) {
                 running = false
                 // One active turn at a time: the service lives exactly as long as the turn does.
                 TurnService.stop(app)
+                // B-14 E2: the ping, posted from the turn's own `finally` — and only when the app is
+                // not what the owner is looking at (in the foreground the thread already shows the
+                // outcome). A plain NotificationManager post on id 2: not a service call, so it can
+                // never bring the service back (B-1). Copy is outcome-aware; `live` is this turn's
+                // events, cleared when it started.
+                if (!AppForeground.visible) {
+                    TurnNotifications.postFinished(app, failed = live.any { it is LoopEvent.Failed })
+                }
                 reconcileSteering()
                 refreshThreads()
                 publish()
@@ -446,6 +488,16 @@ class AppViewModel(context: Context) {
 
     // ---- plumbing ------------------------------------------------------------------------------
 
+    /**
+     * Drops the live events of the previous turn. B-14 E4 rides along: with them goes the
+     * stop-abandoned flag, so the *next* turn's approval prompt is projected normally, while a
+     * stopped turn's can never come back (there is nothing left to project it from).
+     */
+    private fun clearLive() {
+        live.clear()
+        approvalAbandoned = false
+    }
+
     private fun ensureReady() {
         if (!graph.isReady) graph.prepare()
     }
@@ -456,7 +508,7 @@ class AppViewModel(context: Context) {
         try {
             ensureReady()
             val opened = graph.sessionStore.open(id)
-            live.clear()
+            clearLive()
             pendingSteer.clear()
             session = opened
             mode = resolveSessionMode(opened.header, opened.events, graph.settings.mode)
@@ -561,10 +613,15 @@ class AppViewModel(context: Context) {
                 )
             }
         }
-        val withQueued = if (projected != null && pendingSteer.isNotEmpty()) {
-            projected.copy(blocks = projected.blocks + pendingSteer.map { Block.UserText(it, queued = true) })
+        // B-14 E4: an approval card belongs to the turn that asked for it, so a stopped turn's card
+        // is dropped *here* — the one funnel every publish goes through. That is what makes the
+        // guarantee hold for a card the runner only asks for on its way out (see
+        // [approvalAbandoned]) instead of relying on the stop having arrived at the right moment.
+        val withApproval = if (approvalAbandoned) projected?.copy(pendingApproval = null) else projected
+        val withQueued = if (withApproval != null && pendingSteer.isNotEmpty()) {
+            withApproval.copy(blocks = withApproval.blocks + pendingSteer.map { Block.UserText(it, queued = true) })
         } else {
-            projected
+            withApproval
         }
         settingsRow = SettingsState(
             mode = mode,

@@ -728,7 +728,14 @@ fun SessionScreen(
             }
         }
 
-        PhComposer(running = open.running, onSend = onSend, onStop = onStop)
+        // B-14 E4: with a prompt pending the turn is over but unanswered, and the owner still needs a
+        // way to end it from the thread — Stop abandons the prompt (Deny is the answer).
+        PhComposer(
+            running = open.running,
+            onSend = onSend,
+            onStop = onStop,
+            stoppable = open.running || approval != null,
+        )
     }
 }
 
@@ -821,6 +828,8 @@ fun SettingsScreen(
     onModeChange: (ExecutionMode) -> Unit,
     onEdit: (SettingsField, String) -> Unit,
     onOpenBattery: () -> Boolean,
+    onRequestNotifications: () -> Unit,
+    onOpenNotificationSettings: () -> Boolean,
 ) {
     val t = LocalPhTheme.current
     val c = t.colors
@@ -938,6 +947,10 @@ fun SettingsScreen(
                         ShellRow(shell)
                         HorizontalDivider(color = c.hairline)
                         BatteryRow(battery, onOpenBattery)
+                        HorizontalDivider(color = c.hairline)
+                        // B-14 E3: the same BatteryStatus read (notificationsAllowed) drives this
+                        // row — one source of truth for "may this app notify".
+                        NotificationsRow(battery, onRequestNotifications, onOpenNotificationSettings)
                         HorizontalDivider(color = c.hairline)
                         SettingRow(label = "App version", value = BuildConfig.VERSION_NAME)
                     }
@@ -1074,6 +1087,61 @@ private fun ShellRow(shell: ShellInfo?) {
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+    }
+}
+
+/**
+ * B-14 E3: the Diagnostics row for POST_NOTIFICATIONS. `BatteryStatus.notificationsAllowed` is the
+ * one source — it is true below API 33 by construction (the grant happens at install), so a false
+ * value means "13+ and not granted", which is exactly the state the runtime request can fix.
+ *
+ * Tap = the runtime request. A request that does not come back granted reveals the manual path, and
+ * with it a button to this app's notification page: on a device that will not show the dialog, that
+ * page is the only way back on. Nothing here is stored — the state is re-read from the system
+ * (`AppViewModel.refreshBattery`) after every request and every resume.
+ */
+@Composable
+private fun NotificationsRow(
+    status: BatteryStatus?,
+    onRequest: () -> Unit,
+    onOpenSystemPage: () -> Boolean,
+) {
+    val c = LocalPhTheme.current.colors
+    var requested by remember { mutableStateOf(false) }
+    val denied = status != null && !status.notificationsAllowed
+    val onTap: (() -> Unit)? = if (denied) {
+        {
+            requested = true
+            onRequest()
+        }
+    } else {
+        null
+    }
+    Column {
+        SettingRow(
+            label = "Notifications",
+            value = when {
+                status == null -> "checking…"
+                status.notificationsAllowed -> "Allowed — the turn and the ping reach the shade"
+                else -> "Denied — turn notifications are hidden"
+            },
+            chip = when {
+                status == null -> c.textFaint
+                status.notificationsAllowed -> c.ok
+                else -> c.warn
+            },
+            onClick = onTap,
+        )
+        if (requested && denied) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Settings → Apps → ${stringResource(R.string.app_name)} → Notifications → Allow notifications.",
+                color = c.textFaint,
+                fontSize = 11.sp,
+            )
+            Spacer(Modifier.height(6.dp))
+            PhButton("Open notification settings", { onOpenSystemPage() })
         }
     }
 }
