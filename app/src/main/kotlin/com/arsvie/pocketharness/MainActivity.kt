@@ -8,7 +8,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -19,15 +18,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.arsvie.pocketharness.platform.ExecProbe
-import com.arsvie.pocketharness.ui.PocketHarnessTheme
+import com.arsvie.pocketharness.ui.SessionScreen
+import com.arsvie.pocketharness.ui.SessionsScreen
 import com.arsvie.pocketharness.ui.SettingsScreen
-import com.arsvie.pocketharness.ui.ThreadScreen
-import com.arsvie.pocketharness.ui.ThreadsScreen
+import com.arsvie.pocketharness.ui.theme.PhThemeRoot
+import com.arsvie.pocketharness.ui.theme.PhThemes
 
 /**
- * The app shell (ADR-005 §1, restyled by ADR-007): three screens — threads, thread, settings —
- * reached by real navigation (back + gear), not a tab strip. Rendered from [ph.ui.UiState] and
- * driven by [AppViewModel]; no logic here.
+ * The app shell (UI-lab): three screens — sessions, session, settings — reached by real
+ * navigation (back + gear). The look is swappable at runtime (Settings -> Appearance); the host
+ * reads [AppViewModel.themeLook] and wraps everything in [PhThemeRoot].
  *
  * On start it also kicks off the in-app exec probe, which is gated behind `files/run-probe` and
  * writes `filesDir/exec-probe.txt` when asked for (B-3).
@@ -53,8 +53,9 @@ class MainActivity : ComponentActivity() {
         val viewModel = AppViewModel(applicationContext)
 
         setContent {
-            PocketHarnessTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            val theme = PhThemes.of(viewModel.themeLook)
+            PhThemeRoot(theme) {
+                Surface(modifier = Modifier.fillMaxSize(), color = theme.colors.bg) {
                     PocketHarnessApp(viewModel)
                 }
             }
@@ -66,38 +67,38 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** Where the user is. One open thread at a time is the ViewModel's own invariant. */
+/** Where the user is. One open session at a time is the ViewModel's own invariant. */
 private sealed interface Screen {
-    data object Threads : Screen
-    data object Thread : Screen
+    data object Sessions : Screen
+    data object Session : Screen
     data object Settings : Screen
 }
 
 @Composable
 private fun PocketHarnessApp(vm: AppViewModel) {
     val ui = vm.ui
-    var screen by remember { mutableStateOf<Screen>(Screen.Threads) }
-    val backToThreads: () -> Unit = { screen = Screen.Threads }
+    var screen by remember { mutableStateOf<Screen>(Screen.Sessions) }
+    val backToSessions: () -> Unit = { screen = Screen.Sessions }
 
-    BackHandler(enabled = screen != Screen.Threads) { backToThreads() }
+    BackHandler(enabled = screen != Screen.Sessions) { backToSessions() }
 
     when (screen) {
-        Screen.Threads -> ThreadsScreen(
-            threads = ui.threads,
+        Screen.Sessions -> SessionsScreen(
+            sessions = ui.threads,
             onOpen = { id ->
-                vm.openThread(id)
-                screen = Screen.Thread
+                vm.openSession(id)
+                screen = Screen.Session
             },
             onNew = {
-                vm.newThread()
-                screen = Screen.Thread
+                vm.newSession()
+                screen = Screen.Session
             },
             onOpenSettings = { screen = Screen.Settings },
         )
 
-        Screen.Thread -> ThreadScreen(
+        Screen.Session -> SessionScreen(
             open = ui.open,
-            onBack = backToThreads,
+            onBack = backToSessions,
             onSend = { vm.send(it) },
             onStop = { vm.stop() },
             onDecideApproval = { vm.decideApproval(it) },
@@ -107,12 +108,14 @@ private fun PocketHarnessApp(vm: AppViewModel) {
             SettingsScreen(
                 settings = settings,
                 shell = vm.shellInfo,
-                onBack = backToThreads,
+                currentTheme = PhThemes.of(vm.themeLook),
+                onThemeSelected = { look -> vm.setTheme(look) },
+                onBack = backToSessions,
                 onModeChange = { mode -> vm.changeMode(mode) },
                 onEdit = { field, value -> vm.editSetting(field, value) },
             )
         } ?: Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(text = "Loading…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(text = "Loading…")
         }
     }
 }

@@ -25,6 +25,7 @@ import ph.ui.ThreadRow
 import ph.ui.UiState
 import com.arsvie.pocketharness.platform.ShellKind
 import com.arsvie.pocketharness.platform.Userland
+import com.arsvie.pocketharness.ui.theme.PhLook
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -47,6 +48,7 @@ class AppViewModel(context: Context) {
 
     private val app = context.applicationContext
     private val graph = AppGraph(app)
+    private val prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val io = Executors.newSingleThreadExecutor { r -> Thread(r, THREAD_NAME) }
         .asCoroutineDispatcher()
     private val scope = CoroutineScope(SupervisorJob() + io)
@@ -57,6 +59,18 @@ class AppViewModel(context: Context) {
     /** Filled async at start-up: which shell the self-test proved works (ADR-006). */
     var shellInfo by mutableStateOf<ShellInfo?>(null)
         private set
+
+    /** The active UI look (UI-lab); persisted across launches. */
+    var themeLook by mutableStateOf(
+        runCatching { PhLook.valueOf(prefs.getString(KEY_THEME, "") ?: "") }
+            .getOrDefault(PhLook.GINGERBREAD),
+    )
+        private set
+
+    fun setTheme(look: PhLook) {
+        themeLook = look
+        prefs.edit().putString(KEY_THEME, look.name).apply()
+    }
 
     private var threads: List<ThreadRow> = emptyList()
     private var settingsRow: SettingsState? = null
@@ -86,12 +100,12 @@ class AppViewModel(context: Context) {
 
     // ---- public surface ------------------------------------------------------------------------
 
-    fun newThread() {
+    fun newSession() {
         scope.launch {
             ensureReady()
             live.clear()
             pendingSteer.clear()
-            val created = newSession()
+            val created = createSession()
             session = created
             mode = graph.settings.mode
             created.append(SessionEvent.ModeSelected(seq = 0, time = 0, mode = mode))
@@ -100,14 +114,14 @@ class AppViewModel(context: Context) {
         }
     }
 
-    fun openThread(id: String) = scope.launch { open(id) }
+    fun openSession(id: String) = scope.launch { open(id) }
 
     fun send(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
         scope.launch {
             ensureReady()
-            val current = session ?: newSession().also {
+            val current = session ?: createSession().also {
                 session = it
                 it.append(SessionEvent.ModeSelected(seq = 0, time = 0, mode = mode))
                 refreshThreads()
@@ -258,7 +272,7 @@ class AppViewModel(context: Context) {
      * the id we generate, which is byte-identical to what the store would have produced and is
      * picked up by `FileSessionStore.list()`.
      */
-    private fun newSession(): Session {
+    private fun createSession(): Session {
         val id = SESSION_ID_PREFIX + UUID.randomUUID()
         val workspace = graph.workspaceFor(id)
         val header = SessionHeader(
@@ -293,7 +307,7 @@ class AppViewModel(context: Context) {
             ThreadRow(
                 id = summary.id,
                 title = summary.title,
-                subtitle = "seq ${summary.lastSeq} · " + summary.cwd,
+                subtitle = "${summary.lastSeq} events · " + summary.cwd,
                 updatedAt = summary.updatedAt,
             )
         }
@@ -329,5 +343,7 @@ class AppViewModel(context: Context) {
     private companion object {
         const val THREAD_NAME = "ph-app"
         const val SESSION_ID_PREFIX = "session-"
+        const val PREFS_NAME = "ph_ui"
+        const val KEY_THEME = "theme"
     }
 }
