@@ -52,22 +52,37 @@ class FileSessionUiStore(private val file: File) {
         }
     }
 
-    /** Moves a session one step up/down within its own pin-block; block edges and unknown ids are no-ops. */
-    fun move(id: String, up: Boolean) {
+    /**
+     * B-21 A1/A5: puts [id] at [displayIndex] in the **display** order ([pinned ids in manual order],
+     * then the rest) and reports whether the move was accepted.
+     *
+     * The reorder rule from the retired `move` op still holds: a row never leaves its own pin-block,
+     * so an index outside the row's block — or an unknown id, or a no-op index — is refused (false)
+     * and the caller springs the row back. On success the file is rewritten in display order, which
+     * is exactly how [orderedIds] is read back (`pinned first, then the rest`).
+     */
+    fun placeAt(id: String, displayIndex: Int): Boolean {
         synchronized(lock) {
-            val from = order.indexOf(id)
-            if (from < 0) return
-            val inPinnedBlock = id in pinned
-            var to = from + if (up) -1 else 1
-            while (to in order.indices && (order[to] in pinned) != inPinnedBlock) {
-                to += if (up) -1 else 1
-            }
-            if (to !in order.indices) return
-            order.removeAt(from)
-            order.add(to, id)
+            val display = displayOrder()
+            val from = display.indexOf(id)
+            if (from < 0 || from == displayIndex || displayIndex !in display.indices) return false
+            val isPinned = id in pinned
+            val pinnedCount = display.count { it in pinned }
+            val blockFirst = if (isPinned) 0 else pinnedCount
+            val blockLast = if (isPinned) pinnedCount - 1 else display.lastIndex
+            if (displayIndex !in blockFirst..blockLast) return false
+            val next = display.toMutableList()
+            next.removeAt(from)
+            next.add(displayIndex, id)
+            order.clear()
+            order.addAll(next)
             persist()
+            return true
         }
     }
+
+    /** The rendered order: the pinned block first, then the rest — each block in its manual order. */
+    private fun displayOrder(): List<String> = order.filter { it in pinned } + order.filter { it !in pinned }
 
     /** Called when a session is deleted: no trace is left in order or pins. */
     fun forget(id: String) {

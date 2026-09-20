@@ -1,12 +1,19 @@
 package com.arsvie.pocketharness.ui
 
 import android.text.format.DateUtils
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -18,7 +25,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -27,6 +33,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
@@ -42,21 +49,29 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.arsvie.pocketharness.BuildConfig
+import com.arsvie.pocketharness.NEW_SESSION_TITLE
 import com.arsvie.pocketharness.R
 import com.arsvie.pocketharness.SettingsField
 import com.arsvie.pocketharness.ShellInfo
@@ -87,6 +102,8 @@ import ph.ui.Block
 import ph.ui.OpenThread
 import ph.ui.SettingsState
 import ph.ui.ThreadRow
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * The UI-lab screens, rendered entirely through the themed primitives in `ui/theme`. One codebase,
@@ -96,25 +113,54 @@ import ph.ui.ThreadRow
 
 // ---------------------------------------------------------------- sessions list
 
+/**
+ * B-21 gesture tuneables — named and commented, never scattered literals. Swipe distances are
+ * fractions of the row width, so they hold on any screen the list is rendered on.
+ */
+
+/** Fraction of the row width a swipe must cross on release for its action to commit (A2/A3). */
+private const val SWIPE_COMMIT_FRACTION = 0.30f
+
+/** Fraction of the row width at which the icon behind the row is fully revealed. */
+private const val SWIPE_REVEAL_FRACTION = 0.22f
+
+/** A lifted row grows by this factor; the shadow under it makes the pick-up read (A1). */
+private const val DRAG_LIFT_SCALE = 1.03f
+
+/** How far (dp) the lifted row's shadow reaches. */
+private val DRAG_LIFT_SHADOW = 8.dp
+
+/** The list's row spacing — the drag math must use the same step the list lays rows out with. */
+private val SESSION_ROW_SPACING = 10.dp
+
+/** The revealed action icon: inset from the row edge, and its size. */
+private val SWIPE_ICON_INSET = 18.dp
+private val SWIPE_ICON_SIZE = 20.dp
+
 @Composable
 fun SessionsScreen(
     sessions: List<ThreadRow>,
+    loading: Boolean,
     onOpen: (String) -> Unit,
     onNew: () -> Unit,
     onOpenSettings: () -> Unit,
     onRename: (String, String) -> Unit,
     onPin: (String, Boolean) -> Unit,
-    onMove: (String, Boolean) -> Unit,
+    onPlace: (String, Int) -> Unit,
     onDelete: (String) -> Unit,
 ) {
     val t = LocalPhTheme.current
     val c = t.colors
     var renaming by remember { mutableStateOf<ThreadRow?>(null) }
     var pendingDelete by remember { mutableStateOf<ThreadRow?>(null) }
+    // B-21 A1: at most one row is lifted at a time; while it is, the others stop taking gestures.
+    var draggingId by remember { mutableStateOf<String?>(null) }
+    val blocks = remember(sessions) { pinBlocks(sessions) }
     Column(modifier = Modifier.fillMaxSize().background(c.bg)) {
         PhBar(
             title = "Sessions",
-            subtitle = if (sessions.isEmpty()) {
+            // B2: no count before the first scan has landed — the list is "not read yet", not empty.
+            subtitle = if (loading || sessions.isEmpty()) {
                 null
             } else {
                 "${sessions.size} session${if (sessions.size == 1) "" else "s"}"
@@ -125,8 +171,9 @@ fun SessionsScreen(
             },
         )
         Box(modifier = Modifier.weight(1f)) {
-            if (sessions.isEmpty()) {
-                Box(
+            when {
+                loading -> SessionsLoading()
+                sessions.isEmpty() -> Box(
                     modifier = Modifier.fillMaxSize().padding(32.dp),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -135,19 +182,25 @@ fun SessionsScreen(
                         "Tap + to start the first one.\nMessages, tool calls and reasoning all live here.",
                     )
                 }
-            } else {
-                LazyColumn(
+
+                else -> LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 32.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(SESSION_ROW_SPACING),
                 ) {
-                    items(sessions, key = { it.id }) { row ->
+                    itemsIndexed(sessions, key = { _, row -> row.id }) { index, row ->
                         SessionRow(
                             row = row,
+                            index = index,
+                            blockRange = blocks[index],
+                            // A dragged row keeps its own gestures; every other row stands down.
+                            dragBlocked = draggingId != null && draggingId != row.id,
+                            onDragStart = { draggingId = row.id },
+                            onDragEnd = { if (draggingId == row.id) draggingId = null },
+                            onPlace = onPlace,
                             onOpen = onOpen,
                             onRename = { renaming = it },
                             onPin = onPin,
-                            onMove = onMove,
                             onDelete = { pendingDelete = it },
                         )
                     }
@@ -222,108 +275,326 @@ fun SessionsScreen(
 @Composable
 private fun SessionRow(
     row: ThreadRow,
+    index: Int,
+    blockRange: IntRange,
+    dragBlocked: Boolean,
+    onDragStart: () -> Unit,
+    onDragEnd: () -> Unit,
+    onPlace: (String, Int) -> Unit,
     onOpen: (String) -> Unit,
     onRename: (ThreadRow) -> Unit,
     onPin: (String, Boolean) -> Unit,
-    onMove: (String, Boolean) -> Unit,
     onDelete: (ThreadRow) -> Unit,
 ) {
     val t = LocalPhTheme.current
     val c = t.colors
     var menuOpen by remember { mutableStateOf(false) }
-    PhCard(onClick = { onOpen(row.id) }) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (row.pinned) {
-                Icon(
-                    Icons.Default.Star,
-                    contentDescription = "Pinned",
-                    tint = c.accent,
-                    modifier = Modifier.size(14.dp),
-                )
-                Spacer(Modifier.width(7.dp))
+    val spacingPx = with(LocalDensity.current) { SESSION_ROW_SPACING.toPx() }
+    var rowHeightPx by remember { mutableFloatStateOf(0f) }
+    var rowWidthPx by remember { mutableFloatStateOf(0f) }
+
+    // The detectors below are launched once per pointerInput key and then keep running, so the row's
+    // *current* facts are read through state: a value captured at attach time would be the one from
+    // before this row was measured, re-pinned or renamed.
+    val liveRow = rememberUpdatedState(row)
+    val liveBlockRange = rememberUpdatedState(blockRange)
+
+    // A1/A5: hold + drag. The offset follows the finger while the row is lifted; on release the row
+    // either lands where it was dropped (`dragLanded`, so it must not also spring) or springs home.
+    var dragging by remember { mutableStateOf(false) }
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
+    var dragLanded by remember { mutableStateOf(false) }
+
+    // A2/A3: swipe right reveals the Star (pin), swipe left the Delete. `swipeLanded` is set when the
+    // action moved the row itself (pin/unpin): the row is already in its new place, so it must not
+    // glide back across the list.
+    var swiping by remember { mutableStateOf(false) }
+    var swipeOffsetX by remember { mutableFloatStateOf(0f) }
+    var swipeLanded by remember { mutableStateOf(false) }
+
+    val settleY by animateFloatAsState(
+        targetValue = if (dragging) dragOffsetY else 0f,
+        animationSpec = if (dragging) snap() else rowSettleSpring,
+        label = "sessionRowDragY",
+    )
+    val settleX by animateFloatAsState(
+        targetValue = if (swiping) swipeOffsetX else 0f,
+        animationSpec = if (swiping) snap() else rowSettleSpring,
+        label = "sessionRowSwipeX",
+    )
+    val offsetY = when {
+        dragging -> dragOffsetY
+        dragLanded -> 0f
+        else -> settleY
+    }
+    val offsetX = when {
+        swiping -> swipeOffsetX
+        swipeLanded -> 0f
+        else -> settleX
+    }
+    val revealPx = rowWidthPx * SWIPE_REVEAL_FRACTION
+    val revealProgress = if (revealPx > 0f) (abs(offsetX) / revealPx).coerceIn(0f, 1f) else 0f
+
+    /** A drop: commit inside the row's own pin-block, spring back for anything else (A1/A5). */
+    fun settleDrag() {
+        val block = liveBlockRange.value
+        val id = liveRow.value.id
+        val stride = rowHeightPx + spacingPx
+        val raw = stepIndex(offset = dragOffsetY, from = index, stride = stride)
+        val target = if (block.isEmpty()) index else raw.coerceIn(block.first, block.last)
+        if (stride > 0f && raw == target && target != index) {
+            onPlace(id, target)
+            dragLanded = true
+        } else {
+            dragLanded = false
+        }
+        dragging = false
+        dragOffsetY = 0f
+        onDragEnd()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned {
+                rowHeightPx = it.size.height.toFloat()
+                rowWidthPx = it.size.width.toFloat()
             }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    row.title,
-                    color = c.text,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    row.subtitle,
-                    color = c.textDim,
-                    fontSize = t.type.meta,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Spacer(Modifier.width(10.dp))
-            Text(relativeTime(row.updatedAt), color = c.textFaint, fontSize = t.type.meta)
-            Box {
-                PhIconAction(Icons.Default.MoreVert, "Session actions", { menuOpen = true })
-                DropdownMenu(
-                    expanded = menuOpen,
-                    onDismissRequest = { menuOpen = false },
-                    containerColor = c.surface,
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("Rename…", color = c.text) },
-                        onClick = {
-                            menuOpen = false
-                            onRename(row)
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text(if (row.pinned) "Unpin" else "Pin to top", color = c.text) },
-                        onClick = {
-                            menuOpen = false
-                            onPin(row.id, !row.pinned)
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Move up", color = c.text) },
-                        onClick = {
-                            menuOpen = false
-                            onMove(row.id, true)
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Move down", color = c.text) },
-                        onClick = {
-                            menuOpen = false
-                            onMove(row.id, false)
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Delete…", color = c.warn) },
-                        onClick = {
-                            menuOpen = false
-                            onDelete(row)
-                        },
-                    )
+            .zIndex(if (dragging) 1f else 0f)
+            .graphicsLayer {
+                translationY = offsetY
+                val lift = if (dragging) DRAG_LIFT_SCALE else 1f
+                scaleX = lift
+                scaleY = lift
+                if (dragging) {
+                    shape = RoundedCornerShape(t.shape.card)
+                    clip = true
+                    shadowElevation = DRAG_LIFT_SHADOW.toPx()
                 }
             }
-            Icon(
-                Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                tint = c.textFaint,
-                modifier = Modifier.size(18.dp),
-            )
+            // A1: a hold lifts the row and drags it up/down. This detector loses the arena to the
+            // list's scroll before the long press fires and to the swipe below on a sideways flick,
+            // so the three gestures resolve by direction instead of fighting over one row.
+            .pointerInput(row.id, index, dragBlocked) {
+                if (dragBlocked) return@pointerInput
+                detectDragGesturesAfterLongPress(
+                    onDragStart = {
+                        dragging = true
+                        dragLanded = false
+                        dragOffsetY = 0f
+                        onDragStart()
+                    },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        dragOffsetY += amount.y
+                    },
+                    onDragEnd = { settleDrag() },
+                    onDragCancel = {
+                        dragLanded = false
+                        dragging = false
+                        dragOffsetY = 0f
+                        onDragEnd()
+                    },
+                )
+            }
+            // A2/A3: a horizontal drag reveals one icon behind the row; releasing past the threshold
+            // runs the same action the three-dot menu runs, and every path springs the row back.
+            .pointerInput(row.id, dragBlocked) {
+                if (dragBlocked) return@pointerInput
+                detectHorizontalDragGestures(
+                    onDragStart = {
+                        swiping = true
+                        swipeLanded = false
+                        swipeOffsetX = 0f
+                    },
+                    onHorizontalDrag = { change, amount ->
+                        change.consume()
+                        swipeOffsetX = (swipeOffsetX + amount).coerceIn(-rowWidthPx, rowWidthPx)
+                    },
+                    onDragEnd = {
+                        // The threshold is read here, not from the composition that attached this
+                        // detector: a row is measured after that, so the captured width would be 0.
+                        val commitPx = rowWidthPx * SWIPE_COMMIT_FRACTION
+                        val travel = swipeOffsetX
+                        if (commitPx > 0f && travel >= commitPx) {
+                            // A2: right pins — and on an already-pinned row the same gesture unpins.
+                            val current = liveRow.value
+                            onPin(current.id, !current.pinned)
+                            swipeLanded = true
+                        } else if (commitPx > 0f && -travel >= commitPx) {
+                            // A3: left deletes through the same confirm dialog as the menu.
+                            onDelete(liveRow.value)
+                        }
+                        swiping = false
+                        swipeOffsetX = 0f
+                    },
+                    onDragCancel = {
+                        swiping = false
+                        swipeOffsetX = 0f
+                    },
+                )
+            },
+    ) {
+        // A2/A3: drawn behind the row, so it is revealed as the row slides off it.
+        RowSwipeBackdrop(
+            revealRight = offsetX > 0f,
+            progress = revealProgress,
+            pinned = row.pinned,
+        )
+        PhCard(
+            modifier = Modifier.graphicsLayer { translationX = offsetX },
+            onClick = { onOpen(row.id) },
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (row.pinned) {
+                    Icon(
+                        Icons.Default.Star,
+                        contentDescription = "Pinned",
+                        tint = c.accent,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(7.dp))
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        row.title,
+                        color = c.text,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        row.subtitle,
+                        color = c.textDim,
+                        fontSize = t.type.meta,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                Text(relativeTime(row.updatedAt), color = c.textFaint, fontSize = t.type.meta)
+                Box {
+                    PhIconAction(Icons.Default.MoreVert, "Session actions", { menuOpen = true })
+                    DropdownMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false },
+                        containerColor = c.surface,
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Rename…", color = c.text) },
+                            onClick = {
+                                menuOpen = false
+                                onRename(row)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (row.pinned) "Unpin" else "Pin to top", color = c.text) },
+                            onClick = {
+                                menuOpen = false
+                                onPin(row.id, !row.pinned)
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Delete…", color = c.warn) },
+                            onClick = {
+                                menuOpen = false
+                                onDelete(row)
+                            },
+                        )
+                    }
+                }
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = c.textFaint,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
         }
     }
 }
+
+/**
+ * A2/A3: what the swipe reveals behind a row — the `Star` for the right swipe (pin/unpin) and the
+ * `Delete` for the left one, on a tinted backdrop so the icon reads as an action, not as decoration.
+ */
+@Composable
+private fun BoxScope.RowSwipeBackdrop(revealRight: Boolean, progress: Float, pinned: Boolean) {
+    val t = LocalPhTheme.current
+    val c = t.colors
+    val shape = RoundedCornerShape(t.shape.card)
+    val tone = if (revealRight) c.accent else c.warn
+    Box(
+        modifier = Modifier
+            .matchParentSize()
+            .clip(shape)
+            .background(if (revealRight) c.accentTint else c.warnTint, shape),
+        contentAlignment = if (revealRight) Alignment.CenterStart else Alignment.CenterEnd,
+    ) {
+        Icon(
+            imageVector = if (revealRight) Icons.Default.Star else Icons.Default.Delete,
+            contentDescription = when {
+                !revealRight -> "Delete"
+                pinned -> "Unpin"
+                else -> "Pin"
+            },
+            tint = tone.copy(alpha = progress),
+            modifier = Modifier.padding(horizontal = SWIPE_ICON_INSET).size(SWIPE_ICON_SIZE),
+        )
+    }
+}
+
+/** B2: neutral state while the first session-list scan runs — no count, no "No sessions yet". */
+@Composable
+private fun SessionsLoading() {
+    val c = LocalPhTheme.current.colors
+    Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
+        Text("Loading sessions…", color = c.textDim, fontSize = 13.sp)
+    }
+}
+
+/**
+ * A5: the list indices each row may be dropped into — pinned rows move among pinned rows only and
+ * unpinned among unpinned only. It is read from the rows' own `pinned` flag, so it mirrors the
+ * grouping the projection renders instead of second-guessing it.
+ */
+private fun pinBlocks(sessions: List<ThreadRow>): List<IntRange> {
+    val unpinnedStart = sessions.count { it.pinned }
+    return sessions.map { row ->
+        if (row.pinned) 0..(unpinnedStart - 1) else unpinnedStart..sessions.lastIndex
+    }
+}
+
+/**
+ * The list index a dragged row is over: one step per row height + spacing, rounded, so the row swaps
+ * when the finger has crossed half a step. Rows are uniform in height (title and subtitle are both
+ * `maxLines = 1`), which is what lets one measured stride stand in for every row.
+ */
+private fun stepIndex(offset: Float, from: Int, stride: Float): Int =
+    if (stride <= 0f) from else from + (offset / stride).roundToInt()
+
+/** The spring a released row settles with (swipe back, or the drop that was refused). */
+private val rowSettleSpring = spring<Float>(dampingRatio = Spring.DampingRatioLowBouncy)
 
 private fun relativeTime(millis: Long): String =
     DateUtils.getRelativeTimeSpanString(millis).toString()
 
 // ---------------------------------------------------------------- session view
 
+/**
+ * B3: an untitled session is projected with its own id as the title
+ * (`DefaultThreadProjector.titleOf` falls back to `header.id`), and that id is the app's business,
+ * not the owner's — the header shows the same copy the list row shows.
+ */
+private fun threadTitle(open: OpenThread): String =
+    if (open.title == open.id) NEW_SESSION_TITLE else open.title
+
 @Composable
 fun SessionScreen(
     open: OpenThread?,
+    loading: Boolean,
     battery: BatteryStatus?,
     onBack: () -> Unit,
     onSend: (String) -> Unit,
@@ -335,7 +606,7 @@ fun SessionScreen(
     val c = t.colors
     Column(modifier = Modifier.fillMaxSize().background(c.bg)) {
         PhBar(
-            title = open?.title ?: "Session",
+            title = open?.let { threadTitle(it) } ?: "Session",
             subtitle = open?.statusLine,
             onBack = onBack,
             actions = {
@@ -362,7 +633,13 @@ fun SessionScreen(
 
         if (open == null) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                PhEmptyState("No session open", "Pick one from the list, or start a new one.")
+                if (loading) {
+                    // B1: the target session is still being replayed — say so instead of showing
+                    // either the previous session or a "pick one from the list" that is not true.
+                    Text("Loading session…", color = c.textDim, fontSize = 13.sp)
+                } else {
+                    PhEmptyState("No session open", "Pick one from the list, or start a new one.")
+                }
             }
             return
         }

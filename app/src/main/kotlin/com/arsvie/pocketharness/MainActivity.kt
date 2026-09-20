@@ -93,6 +93,9 @@ private fun PocketHarnessApp(vm: AppViewModel) {
     when (screen) {
         Screen.Sessions -> SessionsScreen(
             sessions = ui.threads,
+            // B2: "not read yet" is not "no sessions" — the screen renders neither count nor empty
+            // state until the first scan has landed.
+            loading = !vm.threadsLoaded,
             onOpen = { id ->
                 vm.openSession(id)
                 screen = Screen.Session
@@ -104,12 +107,14 @@ private fun PocketHarnessApp(vm: AppViewModel) {
             onOpenSettings = { screen = Screen.Settings },
             onRename = { id, title -> vm.renameSession(id, title) },
             onPin = { id, pinned -> vm.setPinned(id, pinned) },
-            onMove = { id, up -> vm.moveSession(id, up) },
+            onPlace = { id, index -> vm.placeSession(id, index) },
             onDelete = { id -> vm.deleteSession(id) },
         )
 
         Screen.Session -> SessionScreen(
             open = ui.open,
+            // B1: the neutral state belongs to the app shell, not to the projection.
+            loading = vm.threadLoading,
             battery = vm.battery,
             onBack = backToSessions,
             onSend = { vm.send(it) },
