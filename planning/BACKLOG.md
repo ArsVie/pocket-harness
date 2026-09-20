@@ -166,20 +166,75 @@ the background reads as the app's own bug. (This reverses the mid-build cut reco
 
 ---
 
-## Candidates — asked for on 2026-09-19, not yet ordered
+## B-13 — Replies do not stream
 
-- **Streaming replies.** Turns arrive whole; a max-effort turn is minutes of "running" with no text
-  arriving. SSE (`stream: true`) with the same budgets, deltas rendered into the reply block.
-  Biggest perceived win per line of code; touches `OpenAiClient`, the projector, and the thread block.
-- **Notification with Stop.** Once B-1 lands, the service notification should carry Stop and a
-  "turn finished" ping — the glanceable surface for an agent that runs in the background.
-- **Session hygiene.** Rename, delete, and export a session (markdown or the raw JSONL) — a phone
-  tool that keeps transcripts should let them be shipped off the device.
-- **Trust-list management.** `files/trust.json` only ever grows; Settings needs the list with revoke.
-- **Connection test + first-run setup.** A "test" button in Settings (GET /models) and a first-run
-  prompt for base URL / model / key, so the three-field ritual cannot be typo'd into a mystery failure.
-- **Release hygiene.** The debug APK is 34 MB; R8 + per-ABI splits should halve it, and a release
-  signing key would make `assembleRelease` the artifact of record instead of debug.
+Turns arrive whole (`stream` off): a several-minute reasoning turn shows only the status line — nothing
+lands until the response is complete, and the read budget is one whole-generation timeout. Promoted
+from the 2026-09-19 candidate list; **needs expanding before pickup.**
+
+**To do:** SSE (`stream: true`) against the same endpoint, deltas rendered into the reply block; keep
+the model-visible ⟺ logged invariant (the final message still logs once, whole). Touches
+`OpenAiClient`, the projector (`AssistantText` must accept growth) and the thread block.
+
+**Expand before pickup:** per-chunk idle timeout vs the whole-turn read budget; reasoning deltas (same
+`reasoning`/`reasoning_content` acceptance rule as the wire); whether Stop and the composer stay live
+mid-stream; re-render cadence for long replies.
+
+## B-14 — The service notification is not actionable
+
+The foreground service shows a minimal notification — no Stop, no "turn finished" signal, no path
+back into the thread. On a phone, the notification *is* the app whenever it runs in the background.
+Promoted from the 2026-09-19 candidate list; **needs expanding before pickup.**
+
+**To do:** notification actions (Stop), a "turn finished" ping while the app is not in the foreground,
+tap → open the thread; channels + `POST_NOTIFICATIONS` on 13+ (shared with B-1 §4).
+
+**Expand before pickup:** what a locked-screen Stop does about a pending approval card; ping vs silent
+status; how it interacts with the B-1 restart logic.
+
+## B-15 — Sessions cannot be renamed, deleted, or exported
+
+The sessions list is read-only; `files/sessions/<id>/` and its workspace only accumulate. Promoted
+from the 2026-09-19 candidate list; **needs expanding before pickup.**
+
+**To do:** rename, delete (workspace goes to trash, like `rm`), export — share markdown or the raw
+JSONL off-device (`FileProvider` + share sheet). The trash cap is B-9.
+
+**Expand before pickup:** where a rename lives in an append-only log (new header event vs sidecar
+file); delete semantics (trash vs hard; stale `trust.json` entries keyed on old paths); export
+formats.
+
+## B-16 — No connection test; first-run setup is a three-field ritual
+
+A typo in base URL or model id surfaces as a failed turn — much later than before, now that timeouts
+are generous. There is no way to check the endpoint before talking to it. Promoted from the
+2026-09-19 candidate list; **needs expanding before pickup.**
+
+**To do:** a "Test" action in Settings (cheapest honest probe: `GET {baseUrl}/models`, falling back
+to a 1-token completion) and, when no key is stored, a first-run flow: base URL → model → key → test.
+
+**Expand before pickup:** which probe is honest across OpenAI-compatible providers; what a failure
+shows (status code + redacted body); the first-run copy.
+
+## B-17 — Release hygiene: a 34 MB debug APK is the artifact of record
+
+Releases ship the debug build: ~34 MB, debug-signed, no shrinking. Fine for the owner; it is also
+what anyone else downloads. Promoted from the 2026-09-19 candidate list; **needs expanding before
+pickup.**
+
+**To do:** R8/minify + resource shrinking, per-ABI splits (both bash assets travel in one APK today),
+a real signing key so `assembleRelease` becomes the artifact of record.
+
+**Expand before pickup:** signing-key custody (where it lives, who ever holds it); splits vs a
+universal APK on Releases; a smoke plan for the minified build (Compose + kotlinx.serialization keep
+rules).
+
+---
+
+## Candidates — considered 2026-09-19, not picked
+
+- **Trust-list management.** `files/trust.json` only ever grows; Settings would need the list with
+  revoke. *(Not picked this round; revisit if trust friction shows up in practice.)*
 
 ---
 
