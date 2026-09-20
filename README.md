@@ -7,7 +7,7 @@ as a chat thread you can approve, steer, stop and resume.
 Deliberately small: two tools, a one-sentence system prompt, a linear loop — and the session
 transcript (an append-only JSONL) as the durable object.
 
-![A markdown reply in the thread view (Studio look)](docs/ui/thread.png)
+![The app surface — sessions, a markdown reply, an expanded tool call, settings (Studio look)](docs/ui/surface.png)
 
 ## What it does
 
@@ -17,9 +17,6 @@ transcript (an append-only JSONL) as the durable object.
 - **Every command is visible — and gated.** The thread shows each call with its status; a
   per-folder trust gate asks before the first execution, `rm` maps to trash, and a policy floor
   outranks the mode switch. YOLO mode skips the gate when you would rather not be asked.
-
-![An expanded bash call with its test-suite output (Studio look)](docs/ui/tools.png)
-
 - **Sessions are threads.** Close the app and come back: the thread replays and the model keeps its
   context. Steer mid-turn; Stop ends the turn. Reasoning and tool calls stay collapsible, long
   output stays folded until you expand it.
