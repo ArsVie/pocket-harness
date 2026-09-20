@@ -27,8 +27,10 @@ object ToolSchemas {
         "* State is persistent across command calls and discussions with the user.",
         "* Commands run in this session's working directory, and relative paths resolve there. Run " +
             "'pwd' to confirm where you are.",
-        "* You don't have access to the internet via this tool, and there is no package manager: " +
-            "apt, pip, npm and similar are not available. Use what the shell already provides.",
+        "* There is no package manager and no internet tooling: apt, pip, npm, curl, wget and any TLS " +
+            "tool are absent, and DNS names are not resolved for you. Raw sockets do work — bash's " +
+            "'/dev/tcp' and the toybox 'nc' can reach a literal IP address — so treat the network as " +
+            "a last resort, not as a toolbox. Use what the shell already provides.",
         "* The shell is GNU bash 5.3 on Android, with the toybox utilities; most common tools are " +
             "present, but some GNU options and tools are not. Check a flag with --help if you are " +
             "unsure rather than assuming GNU behaviour.",

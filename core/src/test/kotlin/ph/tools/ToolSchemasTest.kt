@@ -48,6 +48,11 @@ class ToolSchemasTest {
     fun `bash description is corrected for the device and carries the honesty instruction`() {
         val description = ToolSchemas.BASH_DESCRIPTION
         assertTrue(description.contains("no package manager"), "must not promise apt/pip")
+        // B-20: raw sockets are reachable on device — the old "no internet" claim was false. The
+        // description must state the real gaps (tooling, DNS) and the real capability (/dev/tcp).
+        assertTrue(!description.contains("You don't have access to the internet"), "no false no-internet claim")
+        assertTrue(description.contains("'/dev/tcp'"), "raw sockets are reachable and must be described")
+        assertTrue(description.contains("DNS names are not resolved"), "the real gap is the resolver, not the socket")
         assertTrue(description.contains("GNU bash"), "must name the shell that actually runs")
         assertTrue(description.contains("grep -rn"), "search must be taught here, there is no search tool")
         assertTrue(description.contains("sed -n 10,25p"), "range reading must be taught here")
