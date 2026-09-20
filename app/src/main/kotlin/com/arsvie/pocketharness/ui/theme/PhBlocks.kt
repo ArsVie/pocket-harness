@@ -83,7 +83,7 @@ fun PhMessageBlock(role: PhRole, text: String, queued: Boolean = false, meta: St
                 ) {
                     QueuedLabel(queued, if (isUser) c.userText else c.agentText, t.type.meta)
                     SelectionContainer {
-                        Text(text, color = if (isUser) c.userText else c.agentText, fontSize = t.type.body)
+                        PhMarkdown(text, color = if (isUser) c.userText else c.agentText, fontSize = t.type.body)
                     }
                 }
             }
@@ -102,7 +102,7 @@ fun PhMessageBlock(role: PhRole, text: String, queued: Boolean = false, meta: St
                 ) {
                     QueuedLabel(queued, if (isUser) c.userText else c.agentText, t.type.meta)
                     SelectionContainer {
-                        Text(text, color = if (isUser) c.userText else c.agentText, fontSize = t.type.body)
+                        PhMarkdown(text, color = if (isUser) c.userText else c.agentText, fontSize = t.type.body)
                     }
                 }
             }
@@ -133,7 +133,7 @@ fun PhMessageBlock(role: PhRole, text: String, queued: Boolean = false, meta: St
                 }
                 Spacer(Modifier.height(5.dp))
                 SelectionContainer {
-                    Text(text, color = c.text, fontSize = t.type.body, lineHeight = t.type.body * 1.5f)
+                    PhMarkdown(text, color = c.text, fontSize = t.type.body, lineHeight = t.type.body * 1.5f)
                 }
             }
         }
@@ -148,7 +148,7 @@ fun PhMessageBlock(role: PhRole, text: String, queued: Boolean = false, meta: St
                         .padding(horizontal = 13.dp, vertical = 10.dp),
                 ) {
                     QueuedLabel(queued, c.userText, t.type.meta)
-                    SelectionContainer { Text(text, color = c.userText, fontSize = t.type.body) }
+                    SelectionContainer { PhMarkdown(text, color = c.userText, fontSize = t.type.body) }
                 }
             }
         } else {
@@ -162,7 +162,7 @@ fun PhMessageBlock(role: PhRole, text: String, queued: Boolean = false, meta: St
                 )
                 Spacer(Modifier.height(4.dp))
                 SelectionContainer {
-                    Text(text, color = c.agentText, fontSize = t.type.body, lineHeight = t.type.body * 1.45f)
+                    PhMarkdown(text, color = c.agentText, fontSize = t.type.body, lineHeight = t.type.body * 1.45f)
                 }
             }
         }
