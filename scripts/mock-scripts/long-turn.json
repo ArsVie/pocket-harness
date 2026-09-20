@@ -1,0 +1,23 @@
+{
+  "description": "Long tool turn: one bash call that sleeps ~50s (a stand-in for a long build or test run), then a final answer. Used to verify that the foreground service keeps a backgrounded, screen-off turn alive (BACKLOG B-1/B-12). Start the mock, send one message, immediately press Home + power off the screen; the turn must complete and the sentinel must appear in the transcript.",
+  "steps": [
+    {
+      "reasoning": "Long-running work: let the turn prove it survives backgrounding and screen-off.",
+      "text": null,
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "sleep 50 && echo SURVIVED_BACKGROUND && date"
+          }
+        }
+      ],
+      "finish_reason": "tool_calls"
+    },
+    {
+      "reasoning": "The sleep completed while the app was in the background; report it.",
+      "text": "The long tool call completed and printed its sentinel.",
+      "finish_reason": "stop"
+    }
+  ]
+}

@@ -10,6 +10,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- B-12: required by the system for ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS to actually
+         show its dialog (without it Settings' RequestIgnoreBatteryOptimizations finishes silently).
+         Sideload-only concern: Play restricts this permission to apps whose core function needs
+         it — acceptable until a Play distribution is a real goal (ADR-001). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <!-- extractNativeLibs=true (equivalent): declared in build.gradle.kts as
          packaging.jniLibs.useLegacyPackaging = true, because AGP 9 rejects the manifest attribute
          outright (issue #149770867). Currently a no-op: the shipped userland (bundled GNU bash,

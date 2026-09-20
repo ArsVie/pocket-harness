@@ -23,6 +23,8 @@ import ph.ui.OpenThread
 import ph.ui.SettingsState
 import ph.ui.ThreadRow
 import ph.ui.UiState
+import com.arsvie.pocketharness.platform.BatteryOptimizations
+import com.arsvie.pocketharness.platform.BatteryStatus
 import com.arsvie.pocketharness.platform.ShellKind
 import com.arsvie.pocketharness.platform.Userland
 import com.arsvie.pocketharness.ui.theme.PhLook
@@ -60,6 +62,10 @@ class AppViewModel(context: Context) {
     var shellInfo by mutableStateOf<ShellInfo?>(null)
         private set
 
+    /** Battery-exemption state (B-12): read at start-up and re-read on every resume. */
+    var battery by mutableStateOf<BatteryStatus?>(null)
+        private set
+
     /** The active UI look (UI-lab); persisted across launches. */
     var themeLook by mutableStateOf(
         runCatching { PhLook.valueOf(prefs.getString(KEY_THEME, "") ?: "") }
@@ -71,6 +77,17 @@ class AppViewModel(context: Context) {
         themeLook = look
         prefs.edit().putString(KEY_THEME, look.name).apply()
     }
+
+    /**
+     * B-12 §4: called from `Activity.onResume`. The user may have toggled the exemption in
+     * Settings, so re-read instead of trusting the value fetched at start-up.
+     */
+    fun refreshBattery() {
+        battery = BatteryOptimizations.read(app)
+    }
+
+    /** Opens this app's battery page; false when nothing resolved (card shows the manual path). */
+    fun openBatterySettings(): Boolean = BatteryOptimizations.openSettings(app)
 
     private var threads: List<ThreadRow> = emptyList()
     private var settingsRow: SettingsState? = null
@@ -88,6 +105,7 @@ class AppViewModel(context: Context) {
                 mode = graph.settings.mode
                 refreshThreads()
                 shellInfo = readShellInfo()
+                battery = BatteryOptimizations.read(app)
             } catch (t: Throwable) {
                 // A start-up failure (bad preset, no userland) is surfaced, never swallowed.
                 appendFailure(null, t)

@@ -46,16 +46,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arsvie.pocketharness.BuildConfig
+import com.arsvie.pocketharness.R
 import com.arsvie.pocketharness.SettingsField
 import com.arsvie.pocketharness.ShellInfo
+import com.arsvie.pocketharness.platform.BatteryStatus
 import com.arsvie.pocketharness.ui.theme.PhApprovalCard
 import com.arsvie.pocketharness.ui.theme.PhBar
+import com.arsvie.pocketharness.ui.theme.PhButton
 import com.arsvie.pocketharness.ui.theme.PhCard
 import com.arsvie.pocketharness.ui.theme.PhChip
 import com.arsvie.pocketharness.ui.theme.PhComposer
@@ -179,10 +183,12 @@ private fun relativeTime(millis: Long): String =
 @Composable
 fun SessionScreen(
     open: OpenThread?,
+    battery: BatteryStatus?,
     onBack: () -> Unit,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     onDecideApproval: (Boolean) -> Unit,
+    onOpenBattery: () -> Boolean,
 ) {
     val t = LocalPhTheme.current
     val c = t.colors
@@ -266,6 +272,13 @@ fun SessionScreen(
             }
         }
 
+        // B-12: while the app is not battery-exempt, turns can be killed in the background.
+        if (battery != null && !battery.exempt) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)) {
+                BatteryWarningCard(onOpenBattery)
+            }
+        }
+
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -337,17 +350,59 @@ private fun buildRows(blocks: List<Block>, groupTools: Boolean): List<SessionRow
     return out
 }
 
+/**
+ * B-12: shown in the thread while the app is not exempt from battery optimization. The button
+ * opens this app's battery page; when no page resolves, the manual path is revealed instead.
+ */
+@Composable
+private fun BatteryWarningCard(onOpenBattery: () -> Boolean) {
+    val c = LocalPhTheme.current.colors
+    var showManualPath by remember { mutableStateOf(false) }
+    PhCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            PhStatusSquare(c.warn, 9.dp)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "Battery optimization is on",
+                color = c.text,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Text("Turns may be killed in the background.", color = c.textDim, fontSize = 13.sp)
+        if (showManualPath) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Open manually: Settings → Apps → ${stringResource(R.string.app_name)} → Battery → Unrestricted.",
+                color = c.textFaint,
+                fontSize = 12.sp,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "On MIUI: also enable Autostart and lock the app in Recents.",
+                color = c.textFaint,
+                fontSize = 12.sp,
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        PhButton("Open battery settings", { if (!onOpenBattery()) showManualPath = true })
+    }
+}
+
 // ---------------------------------------------------------------- settings
 
 @Composable
 fun SettingsScreen(
     settings: SettingsState,
     shell: ShellInfo?,
+    battery: BatteryStatus?,
     currentTheme: PhTheme,
     onThemeSelected: (PhLook) -> Unit,
     onBack: () -> Unit,
     onModeChange: (ExecutionMode) -> Unit,
     onEdit: (SettingsField, String) -> Unit,
+    onOpenBattery: () -> Boolean,
 ) {
     val t = LocalPhTheme.current
     val c = t.colors
@@ -463,6 +518,8 @@ fun SettingsScreen(
                     Spacer(Modifier.height(8.dp))
                     PhCard {
                         ShellRow(shell)
+                        HorizontalDivider(color = c.hairline)
+                        BatteryRow(battery, onOpenBattery)
                         HorizontalDivider(color = c.hairline)
                         SettingRow(label = "App version", value = BuildConfig.VERSION_NAME)
                     }
@@ -599,6 +656,66 @@ private fun ShellRow(shell: ShellInfo?) {
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun BatteryRow(status: BatteryStatus?, onOpen: () -> Boolean) {
+    val c = LocalPhTheme.current.colors
+    var showManualPath by remember { mutableStateOf(false) }
+    val actionable = status != null && !status.exempt
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (actionable) Modifier.clickable { if (!onOpen()) showManualPath = true } else Modifier)
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PhStatusSquare(
+            when {
+                status == null -> c.textFaint
+                status.exempt -> c.ok
+                else -> c.warn
+            },
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Battery optimization", color = c.text, fontSize = 14.sp)
+            Text(
+                when {
+                    status == null -> "checking…"
+                    status.exempt -> "Exempt — turns run to completion in the background"
+                    else -> "On — turns may be killed in the background"
+                },
+                color = c.textDim,
+                fontSize = 13.sp,
+            )
+            if (status != null) {
+                Text(
+                    "Power save " + (if (status.powerSave) "on" else "off") +
+                        " · notifications " + (if (status.notificationsAllowed) "allowed" else "denied"),
+                    color = c.textFaint,
+                    fontSize = 11.sp,
+                )
+            }
+            if (showManualPath) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Settings → Apps → ${stringResource(R.string.app_name)} → Battery → Unrestricted; on MIUI also Autostart + lock in Recents.",
+                    color = c.textFaint,
+                    fontSize = 11.sp,
+                )
+            }
+        }
+        if (actionable) {
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = c.textFaint,
+                modifier = Modifier.size(18.dp),
+            )
         }
     }
 }

@@ -34,6 +34,8 @@ import com.arsvie.pocketharness.ui.theme.PhThemes
  */
 class MainActivity : ComponentActivity() {
 
+    private lateinit var viewModel: AppViewModel
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -50,7 +52,7 @@ class MainActivity : ComponentActivity() {
             }
         }.start()
 
-        val viewModel = AppViewModel(applicationContext)
+        viewModel = AppViewModel(applicationContext)
 
         setContent {
             val theme = PhThemes.of(viewModel.themeLook)
@@ -60,6 +62,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // B-12 §4: the exemption may have changed while we were away in system Settings.
+        viewModel.refreshBattery()
     }
 
     private companion object {
@@ -98,21 +106,25 @@ private fun PocketHarnessApp(vm: AppViewModel) {
 
         Screen.Session -> SessionScreen(
             open = ui.open,
+            battery = vm.battery,
             onBack = backToSessions,
             onSend = { vm.send(it) },
             onStop = { vm.stop() },
             onDecideApproval = { vm.decideApproval(it) },
+            onOpenBattery = { vm.openBatterySettings() },
         )
 
         Screen.Settings -> ui.settings?.let { settings ->
             SettingsScreen(
                 settings = settings,
                 shell = vm.shellInfo,
+                battery = vm.battery,
                 currentTheme = PhThemes.of(vm.themeLook),
                 onThemeSelected = { look -> vm.setTheme(look) },
                 onBack = backToSessions,
                 onModeChange = { mode -> vm.changeMode(mode) },
                 onEdit = { field, value -> vm.editSetting(field, value) },
+                onOpenBattery = { vm.openBatterySettings() },
             )
         } ?: Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(text = "Loading…")
