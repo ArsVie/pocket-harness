@@ -173,6 +173,75 @@ class DefaultPromptAssemblerTest {
         assertEquals("Error: command timed out after 300s", messages[1].text)
     }
 
+    // ----- B-19 fix 4: never emit a tool_call the provider would reject ----------------------------
+
+    @Test
+    fun aCallWithoutAResultIsNeverEmitted() {
+        val history = listOf(
+            user(0, "go"),
+            turnStart(1, 0),
+            assistant(2, turn = 0, text = "let me look", reasoning = "because reasons"),
+            toolCall(3, turn = 0, id = "c1"),
+            toolCall(4, turn = 0, id = "c2"),
+            toolCall(5, turn = 0, id = "c3"),
+            toolResult(6, "c1", "out one"),
+            // c2 is the call whose turn died in flight: no result was ever written for it.
+            toolResult(7, "c3", "out three"),
+            turnEnd(8, 0),
+        )
+
+        val messages = DefaultPromptAssembler().assemble(history, preset(), emptyList()).history
+
+        assertEquals(listOf(Role.USER, Role.ASSISTANT, Role.TOOL, Role.TOOL), messages.map { it.role })
+        // c2 is dropped from the request, so no `tool_call_id` goes out unanswered.
+        assertEquals(listOf("c1", "c3"), messages[1].toolCalls.map { it.id })
+        assertEquals(listOf("c1", "c3"), messages.drop(2).map { it.toolCallId })
+        // The message still carries tool calls, so it still carries its reasoning.
+        assertEquals("let me look", messages[1].text)
+        assertEquals("because reasons", messages[1].reasoning)
+    }
+
+    @Test
+    fun aTurnWhoseCallsAllLackResultsKeepsItsTextButNotItsReasoning() {
+        val history = listOf(
+            user(0, "go"),
+            turnStart(1, 0),
+            assistant(2, turn = 0, text = "looking", reasoning = "because reasons"),
+            toolCall(3, turn = 0, id = "c1"),
+            turnEnd(4, 0),
+            turnStart(5, 1),
+            assistant(6, turn = 1, text = "done"),
+            turnEnd(7, 1),
+        )
+
+        val assistants = DefaultPromptAssembler()
+            .assemble(history, preset(), emptyList())
+            .history
+            .filter { it.role == Role.ASSISTANT }
+
+        assertEquals(listOf("looking", "done"), assistants.map { it.text })
+        assertTrue(assistants[0].toolCalls.isEmpty())
+        // Reasoning is replayed only on a message that still carries tool calls.
+        assertNull(assistants[0].reasoning)
+    }
+
+    @Test
+    fun aTurnWhoseCallsAllLackResultsAndThatHasNoTextEmitsNothing() {
+        val history = listOf(
+            user(0, "go"),
+            turnStart(1, 0),
+            assistant(2, turn = 0, text = "", reasoning = "because reasons"),
+            toolCall(3, turn = 0, id = "c1"),
+            turnEnd(4, 0),
+        )
+
+        val messages = DefaultPromptAssembler().assemble(history, preset(), emptyList()).history
+
+        // No empty assistant message goes out either: the turn has nothing left to say.
+        assertEquals(listOf(Role.USER), messages.map { it.role })
+        assertEquals(listOf("go"), messages.map { it.text })
+    }
+
     @Test
     fun nonMessageEventsAreIgnored() {
         val history = listOf(

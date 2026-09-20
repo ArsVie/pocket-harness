@@ -94,17 +94,33 @@ class DefaultPromptAssembler(
         var hasContent = false
         var emittedCallTurn = mutableSetOf<Int>()
 
+        // B-19, defense in depth. The projection is the last place that can keep a request the provider
+        // is guaranteed to reject from being built: an assistant message carrying a `tool_call_id` with
+        // no result behind it is a hard 400 ("An assistant message with 'tool_calls' must be followed by
+        // tool messages responding to each 'tool_call_id'"), and it bricks the session for every later
+        // message. A call is therefore emitted only if the history pairs it. What is dropped here is
+        // dropped for the request only — the log keeps it, and the session stays usable.
+        val answeredCalls = history
+            .filterIsInstance<SessionEvent.ToolResult>()
+            .map { it.callId }
+            .toSet()
+
         fun emitToolCallTurn(turn: Int, seq: Int) {
             if (!emittedCallTurn.add(turn)) return
-            val calls = callsByTurn[turn].orEmpty()
+            val calls = callsByTurn[turn].orEmpty().filter { it.id in answeredCalls }
+            val text = textByTurn[turn]?.takeIf { it.isNotEmpty() }
+            // Calls all unpaired and no text left: an empty assistant message carries nothing.
+            if (calls.isEmpty() && text == null) return
             pieces += Piece(
                 seq,
                 currentTurn,
                 ChatMessage(
                     role = Role.ASSISTANT,
-                    text = textByTurn[turn]?.takeIf { it.isNotEmpty() },
+                    text = text,
                     toolCalls = calls,
-                    reasoning = reasoningByTurn[turn],
+                    // Reasoning rides only on a message that still carries tool calls: that is the
+                    // message the provider demands it on, and a plain assistant turn must not replay it.
+                    reasoning = if (calls.isEmpty()) null else reasoningByTurn[turn],
                 ),
             )
         }

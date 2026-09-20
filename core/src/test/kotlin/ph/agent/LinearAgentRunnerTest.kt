@@ -1,7 +1,11 @@
 package ph.agent
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import ph.model.ChatResponse
 import ph.model.ModelError
@@ -9,6 +13,7 @@ import ph.model.ModelErrorCode
 import ph.model.ModelOutcome
 import ph.model.ModelRoute
 import ph.model.ToolCallRequest
+import ph.model.ToolSchema
 import ph.model.Usage
 import ph.policy.ExecutionMode
 import ph.prompt.Budgets
@@ -21,10 +26,12 @@ import ph.testing.FakeAnswers
 import ph.testing.FakeClock
 import ph.testing.FakeModelClient
 import ph.testing.InMemorySessionStore
+import ph.tools.ToolDispatcher
 import ph.tools.ToolErrorCode
 import ph.tools.ToolOutcome
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -73,7 +80,7 @@ class LinearAgentRunnerTest {
     private fun runner(
         models: FakeModelClient,
         prompts: StubPromptAssembler = StubPromptAssembler(),
-        tools: StubToolDispatcher = StubToolDispatcher(),
+        tools: ToolDispatcher = StubToolDispatcher(),
     ) = LinearAgentRunner(models, prompts, tools, FakeClock())
 
     @Test
@@ -433,5 +440,81 @@ class LinearAgentRunnerTest {
         val pruned = session.events[2] as SessionEvent.TranscriptPruned
         assertEquals(listOf(3, 4), pruned.droppedSeqs)
         assertEquals(4_242, pruned.freedChars)
+    }
+
+    // ----- B-19 fix 2: no exit may leave a call without a result ----------------------------------
+
+    @Test
+    fun `a cancelled turn closes the in-flight and the undispatched calls`() = runTest {
+        val calls = listOf(
+            call("c1", """{"command":"a"}"""),
+            call("c2", """{"command":"b"}"""),
+            call("c3", """{"command":"c"}"""),
+        )
+        val models = FakeModelClient(listOf(toolCalls(*calls.toTypedArray())))
+        val tools = NeverAnsweringToolDispatcher()
+        val runner = runner(models, tools = tools)
+        val session = newSession()
+
+        // The shape the app runs a turn in: AppViewModel holds the collect in a Job and cancels it
+        // (a new turn started, or the process itself being killed mid-dispatch). Cancellation is not
+        // an outcome — nothing in the loop gets to write the missing result.
+        val turn = launch { runner.run(session, preset()).collect { } }
+        tools.entered.await()
+        turn.cancelAndJoin()
+
+        // All three calls were logged before the first one was dispatched, so all three need a result.
+        assertEquals(
+            listOf("c1", "c2", "c3"),
+            session.events.filterIsInstance<SessionEvent.ToolCall>().map { it.callId },
+        )
+        // Only the first one ever reached the dispatcher; it is the in-flight call, c2/c3 never ran.
+        assertEquals(listOf("c1"), tools.dispatched.map { it.id })
+        val results = session.events.filterIsInstance<SessionEvent.ToolResult>()
+        assertEquals(listOf("c1", "c2", "c3"), results.map { it.callId })
+        assertTrue(results.all { it.isError })
+        assertEquals("tool call not executed: turn cancelled", results[0].text)
+        assertEquals("tool call not executed: turn cancelled", results[2].text)
+        // The turn itself stays open: only the next open of the log closes it (as INTERRUPTED).
+        assertEquals(0, session.events.count { it is SessionEvent.TurnEnd })
+    }
+
+    @Test
+    fun `a dispatch that throws still leaves every logged call with a result`() = runTest {
+        val models = FakeModelClient(
+            listOf(toolCalls(call("c1", """{"command":"a"}"""), call("c2", """{"command":"b"}"""))),
+        )
+        val runner = runner(models, tools = NeverAnsweringToolDispatcher(throws = true))
+        val session = newSession()
+
+        val failure = assertFailsWith<IllegalStateException> {
+            runner.run(session, preset()).collect { }
+        }
+
+        assertEquals("dispatcher blew up", failure.message)
+        val results = session.events.filterIsInstance<SessionEvent.ToolResult>()
+        assertEquals(listOf("c1", "c2"), results.map { it.callId })
+        assertTrue(results.all { it.isError })
+        assertEquals("tool call not executed: turn cancelled", results[0].text)
+    }
+}
+
+/**
+ * A dispatcher whose call never produces an outcome: it parks until the coroutine is cancelled, or it
+ * throws. Those are the two exits from `dispatch` that are not a value, and they are exactly the ones
+ * that used to leave a dangling `tool_call` behind (B-19 fix 2).
+ */
+private class NeverAnsweringToolDispatcher(private val throws: Boolean = false) : ToolDispatcher {
+    override val schemas = listOf(
+        ToolSchema(name = "bash", description = "run a command", parametersJson = """{"type":"object"}"""),
+    )
+    val dispatched = mutableListOf<ToolCallRequest>()
+    val entered = CompletableDeferred<Unit>()
+
+    override suspend fun dispatch(call: ToolCallRequest, cwd: String, mode: ExecutionMode): ToolOutcome {
+        dispatched += call
+        entered.complete(Unit)
+        if (throws) error("dispatcher blew up")
+        awaitCancellation()
     }
 }
