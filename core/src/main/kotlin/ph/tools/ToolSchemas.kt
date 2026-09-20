@@ -32,6 +32,11 @@ object ToolSchemas {
         "* The shell is GNU bash 5.3 on Android, with the toybox utilities; most common tools are " +
             "present, but some GNU options and tools are not. Check a flag with --help if you are " +
             "unsure rather than assuming GNU behaviour.",
+        "* Known gaps: python, git and similar tools are absent; 'grep -P' and 'xargs -I' do not " +
+            "exist; 'sort -n' truncates decimals (use 'sort -g' for numeric keys).",
+        "* Write scripts with a '#!/system/bin/sh' shebang and run them with 'sh script.sh' " +
+            "('bash script.sh' also works). There is no '/usr/bin/env'. Put temporary files in " +
+            "'\$TMPDIR', not '/tmp' — '/tmp' is not writable.",
         "* To inspect a particular line range of a file, e.g. lines 10-25, try 'sed -n 10,25p " +
             "/path/to/the/file'. Check the size with 'wc -l' before dumping a whole file.",
         "* To search, use 'grep -rn pattern path'. There is no separate search tool.",

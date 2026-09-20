@@ -53,6 +53,9 @@ class ToolSchemasTest {
         assertTrue(description.contains("sed -n 10,25p"), "range reading must be taught here")
         assertTrue(description.contains(".trash/"), "trash semantics are model-visible")
         assertTrue(description.contains("report a failure as a failure"), "verify-before-claim lives here, not in the persona")
+        assertTrue(description.contains("#!/system/bin/sh"), "shebang rule: /usr/bin/env does not exist")
+        assertTrue(description.contains("\$TMPDIR"), "temp files go to \$TMPDIR; /tmp is not writable")
+        assertTrue(description.contains("sort -g"), "toybox sort -n truncates decimals; -g is the fix")
     }
 
     @Test

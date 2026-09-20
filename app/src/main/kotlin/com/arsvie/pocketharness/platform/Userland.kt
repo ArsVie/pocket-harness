@@ -28,6 +28,8 @@ enum class ShellKind {
  * Layout under `context.filesDir`:
  *   userland/bash      the bundled bash for this ABI, unpacked from `assets/userland/bash-<abi>`
  *   shims/rm           the `rm`→trash shim from `assets/userland/rm.sh` (shebang in-file)
+ *   shims/bash         a one-line exec shim to the bundled bash (generated at provision;
+ *                      Android has no `bash` on PATH and scripts expect one)
  *
  * Everything here is a path, not a policy: `:core` never guesses a path (ShellBinaries).
  */
@@ -41,11 +43,14 @@ class AndroidShellBinaries(context: Context) : ShellBinaries {
     /** The platform shell — the fallback when the bundled bash cannot be proven. */
     val systemShell: File = File("/system/bin/sh")
 
-    /** Directory holding the shipped `rm` shim. */
+    /** Directory holding the shipped shims (`rm`→trash, `bash`→bundled bash). */
     val shimDir: File = File(context.filesDir, "shims")
 
-    /** The shim itself. */
+    /** The `rm` shim itself. */
     val shim: File = File(shimDir, "rm")
+
+    /** The `bash` shim: re-execs the resolved bundled bash; written by [Userland.provision]. */
+    val bashShim: File = File(shimDir, "bash")
 
     /**
      * The bash asset for this device, picked in [Build.SUPPORTED_ABIS] order so the emulator takes
@@ -142,7 +147,8 @@ object Userland {
 
     /**
      * Unpack the bundled bash for this device's ABI into app-private storage, make it executable,
-     * resolve which shell works, then write the `rm` shim from its asset. Idempotent; safe to call
+     * resolve which shell works, then write the shims (`rm` from its asset, `bash` generated).
+     * Idempotent; safe to call
      * on every start. Returns a human-readable log line per step (the exec probe records it).
      */
     fun provision(context: Context): List<String> {
@@ -189,6 +195,18 @@ object Userland {
         bin.shim.setExecutable(true, true)
         log += "wrote shim ${bin.shim.absolutePath} (canExecute=${bin.shim.canExecute()}, " +
             "shebang=${shimText.lineSequence().first()})"
+
+        // 4. The bash shim (shell-spike finding): with no `bash` on PATH, `bash script.sh`
+        // and `#!/system/bin/env bash` shebangs die with ENOENT. A one-line exec shim restores
+        // both; written only when the self-test proved the bundled bash actually works.
+        if (bin.kind == ShellKind.BASH) {
+            bin.bashShim.writeText("#!/system/bin/sh\nexec \"${bin.chosen.absolutePath}\" \"\$@\"\n")
+            bin.bashShim.setExecutable(true, true)
+            log += "wrote shim ${bin.bashShim.absolutePath} (canExecute=${bin.bashShim.canExecute()}, " +
+                "exec=${bin.chosen.absolutePath})"
+        } else {
+            log += "no bash shim: bundled bash did not resolve to BASH; platform shell in use"
+        }
 
         log += "PATH prefix = ${bin.pathPrefix()}"
         return log
