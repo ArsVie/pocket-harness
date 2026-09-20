@@ -250,7 +250,6 @@ class DefaultPromptAssemblerTest {
             SessionEvent.StepStart(2, 0L, 0, 0),
             SessionEvent.ModelFailure(3, 0L, 0, ModelErrorCode.TRANSPORT, "boom"),
             SessionEvent.TranscriptPruned(4, 0L, listOf(9), 42),
-            SessionEvent.ApprovalDecided(5, 0L, "/tmp", granted = true),
             SessionEvent.SessionTitle(6, 0L, "title"),
             turnEnd(7, 0),
         )
@@ -433,6 +432,48 @@ class DefaultPromptAssemblerTest {
         assertEquals(listOf("start", "B".repeat(80), "C".repeat(80)), assembled.history.map { it.text })
     }
 
+    // ----- B-11: an approval decision reaches the model --------------------------------------------
+
+    @Test
+    fun anApprovedFolderIsSurfacedToTheModelAsTheUserSpeaking() {
+        val history = listOf(
+            user(0, "go"),
+            turnStart(1, 0),
+            toolCall(2, turn = 0, id = "c1"),
+            toolResult(3, "c1", "Error: /sandbox/x is not trusted; approve this folder first", isError = true),
+            turnEnd(4, 0),
+            approvalDecided(5, cwd = "/sandbox/x", granted = true),
+        )
+
+        val messages = DefaultPromptAssembler().assemble(history, preset(), emptyList()).history
+
+        assertEquals(listOf(Role.USER, Role.ASSISTANT, Role.TOOL, Role.USER), messages.map { it.role })
+        val note = messages.last().text.orEmpty()
+        assertTrue("/sandbox/x" in note, note)
+        assertTrue("approved" in note, note)
+        // The denial stays as the paired tool message; the note is an extra user turn on top.
+        assertEquals(listOf("c1"), messages.filter { it.role == Role.TOOL }.map { it.toolCallId })
+    }
+
+    @Test
+    fun aDeclinedFolderIsSurfacedToo() {
+        val history = listOf(
+            user(0, "go"),
+            turnStart(1, 0),
+            toolCall(2, turn = 0, id = "c1"),
+            toolResult(3, "c1", "Error: /sandbox/y is not trusted; approve this folder first", isError = true),
+            turnEnd(4, 0),
+            approvalDecided(5, cwd = "/sandbox/y", granted = false),
+        )
+
+        val messages = DefaultPromptAssembler().assemble(history, preset(), emptyList()).history
+
+        assertEquals(Role.USER, messages.last().role)
+        val note = messages.last().text.orEmpty()
+        assertTrue("/sandbox/y" in note, note)
+        assertTrue("did not approve" in note, note)
+    }
+
     // ----- helpers ---------------------------------------------------------------------------------
 
     private fun pruneBudgets(threshold: Int) = Budgets(
@@ -480,4 +521,7 @@ class DefaultPromptAssemblerTest {
 
     private fun toolResult(seq: Int, id: String, text: String, isError: Boolean = false) =
         SessionEvent.ToolResult(seq, 0L, id, isError, text)
+
+    private fun approvalDecided(seq: Int, cwd: String, granted: Boolean) =
+        SessionEvent.ApprovalDecided(seq, 0L, cwd, granted)
 }

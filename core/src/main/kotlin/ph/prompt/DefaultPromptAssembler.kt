@@ -163,6 +163,21 @@ class DefaultPromptAssembler(
                     )
                     hasContent = true
                 }
+                // B-11: the loop interrupts the turn on a denial and the user decides afterwards; the
+                // model, which only ever saw the denial, then improvised elsewhere ("the folder is
+                // still not approved"). The decision is a fact of the conversation — surface it as the
+                // user speaking so the resumed turn knows the folder is trusted and can re-run the
+                // command it was denied.
+                is SessionEvent.ApprovalDecided -> {
+                    if (currentTurn < 0) currentTurn = 0
+                    val note = if (event.granted) {
+                        "I approved folder ${event.cwd}. It is trusted now — re-run the command that was denied."
+                    } else {
+                        "I did not approve folder ${event.cwd}."
+                    }
+                    pieces += Piece(event.seq, currentTurn, ChatMessage(role = Role.USER, text = note))
+                    hasContent = true
+                }
                 // TurnEnd, StepStart, ModelFailure (UI-only), TranscriptPruned, ModeSelected, … : no message.
                 else -> Unit
             }
