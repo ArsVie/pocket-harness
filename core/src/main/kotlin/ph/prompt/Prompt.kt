@@ -22,6 +22,12 @@ data class Budgets(
     val pruneHeadChars: Int = 8_000,
     val pruneTailChars: Int = 4_000,
     val verbatimToolResults: Int = 4,
+    /** OkHttp connect budget for model calls; the client default was 10s. */
+    val modelConnectTimeoutMs: Long = 30_000,
+    /** OkHttp read budget for model calls: the longest silent mid-generation gap allowed.
+     *  The old implicit default (10s) killed healthy turns while a model was still thinking;
+     *  the client is non-streaming, so this covers one whole generation. */
+    val modelReadTimeoutMs: Long = 600_000,
 )
 
 data class LoopConfig(

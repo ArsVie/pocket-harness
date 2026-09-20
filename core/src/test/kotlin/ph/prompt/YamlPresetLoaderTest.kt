@@ -44,6 +44,8 @@ class YamlPresetLoaderTest {
         assertEquals(32_000, preset.budgets.maxOutputChars)
         assertEquals(250_000, preset.budgets.contextCapTokens)
         assertEquals(4, preset.budgets.verbatimToolResults)
+        assertEquals(30_000L, preset.budgets.modelConnectTimeoutMs)
+        assertEquals(600_000L, preset.budgets.modelReadTimeoutMs)
         assertEquals(8, preset.loop.toolCallsPerStepCap)
         assertEquals(2, preset.loop.modelRetries)
         assertEquals(listOf(250L, 750L), preset.loop.retryBackoffMs)
@@ -63,6 +65,8 @@ class YamlPresetLoaderTest {
         assertEquals(listOf("bash", "editor"), preset.tools)
         assertEquals(1_000L, preset.budgets.commandTimeoutMs)
         assertEquals(3.0, preset.budgets.charsPerToken)
+        assertEquals(2_000L, preset.budgets.modelConnectTimeoutMs)
+        assertEquals(9_000L, preset.budgets.modelReadTimeoutMs)
         assertEquals(5, preset.loop.turnCap)
         assertEquals(listOf(100L), preset.loop.retryBackoffMs)
         assertEquals(route, preset.route)
@@ -246,6 +250,8 @@ class YamlPresetLoaderTest {
               pruneHeadChars: 80
               pruneTailChars: 40
               verbatimToolResults: 2
+              modelConnectTimeoutMs: 2000
+              modelReadTimeoutMs: 9000
             loop:
               turnCap: 5
               toolCallsPerStepCap: 4

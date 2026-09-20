@@ -34,6 +34,8 @@ budgets:
   pruneHeadChars: 8000
   pruneTailChars: 4000
   verbatimToolResults: 4
+  modelConnectTimeoutMs: 30000
+  modelReadTimeoutMs: 600000
 
 loop:
   turnCap: null

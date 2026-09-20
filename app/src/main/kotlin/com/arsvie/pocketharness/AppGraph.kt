@@ -27,6 +27,7 @@ import ph.tools.Tool
 import ph.tools.ToolSchemas
 import ph.ui.DefaultThreadProjector
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 /** The user-editable settings half of the graph (SPEC §2.5 route + ADR-004 mode). */
 data class AppSettings(
@@ -159,6 +160,8 @@ class AppGraph(private val context: Context) {
         )
         val dispatcher = DefaultToolDispatcher(tools, DefaultPolicyFloor(), trustStore, loaded.budgets)
         val http = OkHttpClient.Builder()
+            .connectTimeout(loaded.budgets.modelConnectTimeoutMs, TimeUnit.MILLISECONDS)
+            .readTimeout(loaded.budgets.modelReadTimeoutMs, TimeUnit.MILLISECONDS)
             .apply { if (BuildConfig.DEBUG) addInterceptor(DebugWireLogger()) } // DEBUG-ONLY
             .build()
         val client = OpenAiClient(route, secrets, clock, http, loaded.loop)
