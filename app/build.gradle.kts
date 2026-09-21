@@ -16,8 +16,8 @@ android {
         applicationId = "com.arsvie.pocketharness"
         minSdk = 28 // ADR-005 §8: same pin as targetSdk. Also the floor for java.lang.Process#waitFor(timeout)
         targetSdk = 28 // deliberate: keeps exec of app-data files legal (ADR-001 / ADR-005 §8)
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.2.1"
 
         // The bundled shell (GNU bash 5.3, ADR-006) ships as per-ABI assets — `userland/bash-x86_64`
         // and `userland/bash-aarch64` — picked at runtime from Build.SUPPORTED_ABIS; no jniLibs.
