@@ -15,3 +15,6 @@ captures/
 
 # Working notes — planning lives on disk for the agents, never in the public tree.
 planning/
+
+# Local review evidence (screenshots, UI dumps, device transcripts): kept on disk, never committed.
+review/
