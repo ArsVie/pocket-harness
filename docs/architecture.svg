@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" width="960" height="600" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <title>PocketHarness architecture</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <style>
+      .box { fill: #ffffff; stroke: #94a3b8; stroke-width: 1.2; }
+      .core { fill: #eef2ff; stroke: #6366f1; stroke-width: 1.5; }
+      .app { fill: #f0fdf4; stroke: #16a34a; stroke-width: 1.5; }
+      .ext { fill: #fff7ed; stroke: #ea580c; stroke-width: 1.5; }
+      .h { font-size: 15px; font-weight: 700; fill: #0f172a; }
+      .t { font-size: 13px; font-weight: 600; fill: #0f172a; }
+      .s { font-size: 11px; fill: #475569; }
+      .edge { stroke: #475569; stroke-width: 1.4; fill: none; marker-end: url(#arrow); }
+      .lbl { font-size: 11px; fill: #334155; }
+    </style>
+  </defs>
+
+  <rect width="960" height="600" fill="#ffffff"/>
+
+  <!-- :app -->
+  <rect class="app" x="20" y="20" width="920" height="150" rx="10"/>
+  <text class="h" x="36" y="44">:app  (Android, Jetpack Compose; renders state, holds no agent logic)</text>
+
+  <rect class="box" x="36" y="60" width="200" height="94" rx="6"/>
+  <text class="t" x="48" y="82">Screens + AppViewModel</text>
+  <text class="s" x="48" y="102">sessions list, thread view drawn</text>
+  <text class="s" x="48" y="118">from ThreadProjector, approval</text>
+  <text class="s" x="48" y="134">card, settings, four themes</text>
+
+  <rect class="box" x="252" y="60" width="200" height="94" rx="6"/>
+  <text class="t" x="264" y="82">TurnService</text>
+  <text class="s" x="264" y="102">foreground service that keeps</text>
+  <text class="s" x="264" y="118">a turn alive in the background;</text>
+  <text class="s" x="264" y="134">Stop action in the notification</text>
+
+  <rect class="box" x="468" y="60" width="220" height="94" rx="6"/>
+  <text class="t" x="480" y="82">AndroidShell + Userland</text>
+  <text class="s" x="480" y="102">bundled GNU bash 5.3 (NDK build),</text>
+  <text class="s" x="480" y="118">rm-to-trash shim, process-tree</text>
+  <text class="s" x="480" y="134">kill on timeout</text>
+
+  <rect class="box" x="704" y="60" width="220" height="94" rx="6"/>
+  <text class="t" x="716" y="82">Platform adapters</text>
+  <text class="s" x="716" y="102">API key in Android Keystore,</text>
+  <text class="s" x="716" y="118">per-folder trust store,</text>
+  <text class="s" x="716" y="134">notifications, battery check</text>
+
+  <!-- :core -->
+  <rect class="core" x="20" y="200" width="920" height="300" rx="10"/>
+  <text class="h" x="36" y="224">:core  (pure Kotlin/JVM, no Android imports; all agent logic, unit-tested with ./gradlew :core:test)</text>
+
+  <rect class="box" x="36" y="244" width="250" height="100" rx="6"/>
+  <text class="t" x="48" y="266">LinearAgentRunner</text>
+  <text class="s" x="48" y="286">one model call, run the tool calls,</text>
+  <text class="s" x="48" y="302">repeat; steering drained at step</text>
+  <text class="s" x="48" y="318">boundaries; Stop; repeat-call warning</text>
+  <text class="s" x="48" y="334">every tool_call gets exactly one result</text>
+
+  <rect class="box" x="306" y="244" width="250" height="100" rx="6"/>
+  <text class="t" x="318" y="266">DefaultPromptAssembler</text>
+  <text class="s" x="318" y="286">preset from minimal.yaml: one-line</text>
+  <text class="s" x="318" y="302">system prompt, byte-stable tool</text>
+  <text class="s" x="318" y="318">schemas (cache-friendly prefix),</text>
+  <text class="s" x="318" y="334">old tool output pruned head/tail</text>
+
+  <rect class="box" x="576" y="244" width="348" height="100" rx="6"/>
+  <text class="t" x="588" y="266">OpenAiClient</text>
+  <text class="s" x="588" y="286">OkHttp, POST chat/completions, non-streaming;</text>
+  <text class="s" x="588" y="302">fixed field order, reasoning_effort only;</text>
+  <text class="s" x="588" y="318">reasoning replayed on tool-call turns;</text>
+  <text class="s" x="588" y="334">retries with backoff, errors returned as values</text>
+
+  <rect class="box" x="36" y="364" width="250" height="120" rx="6"/>
+  <text class="t" x="48" y="386">DefaultToolDispatcher</text>
+  <text class="s" x="48" y="406">1. policy floor (both modes): rm -rf /,</text>
+  <text class="s" x="48" y="422">   block-device writes, fork bomb, reboot</text>
+  <text class="s" x="48" y="438">2. DEFAULT mode: untrusted folder asks</text>
+  <text class="s" x="48" y="454">   for approval; YOLO skips this step</text>
+  <text class="s" x="48" y="470">3. run the tool, catch every failure</text>
+
+  <rect class="box" x="306" y="364" width="250" height="120" rx="6"/>
+  <text class="t" x="318" y="386">Tools</text>
+  <text class="s" x="318" y="406">bash: exit code, timeout, output</text>
+  <text class="s" x="318" y="422">clipped to head/tail, rest spilled</text>
+  <text class="s" x="318" y="438">to a file the model can read</text>
+  <text class="s" x="318" y="454">str_replace_editor: view, create,</text>
+  <text class="s" x="318" y="470">unique str_replace, insert</text>
+
+  <rect class="box" x="576" y="364" width="170" height="120" rx="6"/>
+  <text class="t" x="588" y="386">JsonlSessionLog</text>
+  <text class="s" x="588" y="406">append-only session.jsonl,</text>
+  <text class="s" x="588" y="422">flushed per event; replay</text>
+  <text class="s" x="588" y="438">drops a torn last line and</text>
+  <text class="s" x="588" y="454">closes an open turn as</text>
+  <text class="s" x="588" y="470">INTERRUPTED</text>
+
+  <rect class="box" x="762" y="364" width="162" height="120" rx="6"/>
+  <text class="t" x="774" y="386">ThreadProjector</text>
+  <text class="s" x="774" y="406">log + live events into</text>
+  <text class="s" x="774" y="422">the thread the UI shows</text>
+  <text class="s" x="774" y="438">(pure function, so a</text>
+  <text class="s" x="774" y="454">reopened thread renders</text>
+  <text class="s" x="774" y="470">the same)</text>
+
+  <!-- external -->
+  <rect class="ext" x="36" y="530" width="720" height="54" rx="8"/>
+  <text class="t" x="48" y="552">Device filesystem (app storage)</text>
+  <text class="s" x="48" y="570">per-session workspace with its .trash/, and sessions/&lt;id&gt;/session.jsonl</text>
+
+  <rect class="ext" x="776" y="530" width="148" height="54" rx="8"/>
+  <text class="t" x="788" y="552">Model endpoint</text>
+  <text class="s" x="788" y="570">OpenAI-compatible</text>
+
+  <!-- edges -->
+  <path class="edge" d="M286,294 L304,294"/>
+  <path class="edge" d="M556,294 L574,294"/>
+  <path class="edge" d="M924,300 L932,300 L932,557 L926,557"/>
+  <text class="lbl" x="890" y="516">HTTPS</text>
+  <path class="edge" d="M160,344 L160,362"/>
+  <path class="edge" d="M286,424 L304,424"/>
+  <path class="edge" d="M430,484 L430,528"/>
+  <path class="edge" d="M661,484 L661,528"/>
+  <path class="edge" d="M746,424 L760,424"/>
+  <path class="edge" d="M136,154 L136,242"/>
+  <text class="lbl" x="142" y="190">run / steer / stop</text>
+  <path class="edge" d="M556,400 L566,400 L566,156"/>
+  <text class="lbl" x="572" y="190">exec via the Shell port</text>
+</svg>

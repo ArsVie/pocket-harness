@@ -1,8 +1,8 @@
 # userland/ — provenance and packaging
 
 What ships as the device-side shell for the harness, where it came from, and how it is deployed.
-Verified by the orchestrator; see `../planning/ENVIRONMENT.md` ("v2: the bash userland") and
-`../planning/decisions/0006-shell-userland-bash.md`.
+The decision record (ADR-006) and the environment notes (ENVIRONMENT.md) cited below are internal
+working notes and are not part of this repository.
 
 ## Contents
 
@@ -30,7 +30,7 @@ interpreter `/system/bin/linker64`.
 The script carries the one non-obvious configure knob, `bash_cv_getcwd_malloc=yes`. Its
 justification is the on-device probe `scripts/getcwd-probe.c`; the postmortem (cross-compiling
 without it compiles in bash's walk-up `getcwd` emulation, which prints a permission error on every
-run in app storage) is in ENVIRONMENT.md.
+run in app storage) is in the internal ENVIRONMENT.md notes.
 
 ## Licence
 
