@@ -19,6 +19,8 @@ import java.util.UUID
 class FileSessionStore(
     private val rootDir: File,
     private val clock: Clock,
+    /** Where [delete] moves session directories (B-15) — a sibling of [rootDir] by default. */
+    private val trashDir: File = File(rootDir.parentFile, TRASH_SUBDIR),
 ) : SessionStore {
 
     override fun create(cwd: String, presetId: String): Session {
@@ -45,7 +47,13 @@ class FileSessionStore(
     override fun delete(id: String) {
         val dir = File(rootDir, id)
         if (!dir.isDirectory) return
-        dir.deleteRecursively()
+        trashDir.mkdirs()
+        val target = File(trashDir, clock.nowMillis().toString() + "-" + id)
+        if (!dir.renameTo(target)) {
+            // Cross-device or racing rename: copy then drop, so a delete never loses data silently.
+            dir.copyRecursively(target, overwrite = true)
+            dir.deleteRecursively()
+        }
         writeIndex(scan())
     }
 
@@ -57,11 +65,16 @@ class FileSessionStore(
             if (!child.isDirectory || !log.isFile) continue
             val replay = replaySessionFile(log)
             val firstUser = replay.events.filterIsInstance<SessionEvent.UserMessage>().firstOrNull()
+            val manual = replay.events.filterIsInstance<SessionEvent.SessionTitle>()
+                .map { it.title.trim() }
+                .lastOrNull { it.isNotEmpty() }
             val last = replay.events.lastOrNull()
             rows += SessionSummary(
                 id = replay.header.id,
                 cwd = replay.header.cwd,
-                title = firstUser?.text?.take(TITLE_MAX_CHARS) ?: replay.header.id,
+                title = manual?.take(TITLE_MAX_CHARS)
+                    ?: firstUser?.text?.take(TITLE_MAX_CHARS)
+                    ?: replay.header.id,
                 updatedAt = last?.time ?: replay.header.createdAt,
                 lastSeq = last?.seq ?: LAST_SEQ_EMPTY,
             )
@@ -93,6 +106,9 @@ class FileSessionStore(
 
         /** SPEC §2.3: the first `UserMessage`'s text is truncated to 60 chars for the inbox title. */
         const val TITLE_MAX_CHARS = 60
+
+        /** B-15 delete: a deleted session's directory moves under `<parent>/trash/sessions/`. */
+        const val TRASH_SUBDIR = "trash/sessions"
 
         /** No events ⇒ the session's last seq is -1 (SPEC §2.3). */
         const val LAST_SEQ_EMPTY = -1

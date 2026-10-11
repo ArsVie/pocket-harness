@@ -1,13 +1,21 @@
-#!/bin/sh
+#!/system/bin/sh
 # PocketHarness `rm` shim — moving to trash instead of unlinking (ADR-004 §5).
+# This is a verbatim copy of `app/src/main/assets/userland/rm.sh` (the file that ships), kept here
+# for provenance and for the host-side checks in scripts/test-userland.sh.
 #
-# Deployed by the app with @SHELL@ substituted for the absolute path of the shipped busybox
-# shell, and placed FIRST on PATH ahead of the busybox applets. `PH_TRASH_DIR` is exported by the
-# tool layer as `<workspace>/.trash`; if it is unset the shim falls back to `$PWD/.trash`.
+# Deployed by [Userland.provision] from the asset, made executable, and placed FIRST on PATH.
+# `PH_TRASH_DIR` is exported by the tool layer as `<workspace>/.trash`; if it is unset the shim
+# falls back to `$PWD/.trash`. The shebang is fixed: the shim always runs under the platform
+# shell's mksh via the kernel, whatever shell the harness itself execs (bundled GNU bash 5.3, or
+# the platform shell as fallback — ADR-006).
+#
+# Only applets that exist on the platform are used: mkdir/date/mv/basename/ls are toybox applets
+# in /system/bin. A static busybox userland is a measured dead end under the app seccomp filter
+# (SIGSYS on applet dispatch), so nothing here may depend on one. See planning/ENVIRONMENT.md.
 #
 # Known limits, accepted in ADR-002 and ADR-004: this intercepts `rm` invoked by name. A command
-# that reaches the applet another way (`busybox rm -rf x`) or a binary that calls unlink(2) is not
-# intercepted. The floor denies the catastrophic shapes before exec; this shim catches the rest.
+# that reaches the applet another way (`toybox rm -rf x`) or a binary that calls unlink(2) is not
+# intercepted. The floor denies the catastrophic shapes before execution; this shim catches the rest.
 #
 # Flags are accepted and ignored: -r/-f/-rf/-i describe how a recursive delete would proceed, and
 # moving a directory wholesale needs none of them. Globs are expanded by the invoking shell, so

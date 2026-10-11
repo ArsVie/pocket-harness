@@ -15,6 +15,7 @@ data class ThreadRow(
     val title: String,
     val subtitle: String,
     val updatedAt: Long,
+    val pinned: Boolean = false,
 )
 
 data class ApprovalPrompt(

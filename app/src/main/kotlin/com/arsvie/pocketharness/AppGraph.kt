@@ -5,6 +5,7 @@ import android.util.Log
 import com.arsvie.pocketharness.platform.AndroidSecretStore
 import com.arsvie.pocketharness.platform.AndroidShell
 import com.arsvie.pocketharness.platform.AndroidShellBinaries
+import com.arsvie.pocketharness.platform.FileSessionUiStore
 import com.arsvie.pocketharness.platform.FileTrustStore
 import com.arsvie.pocketharness.platform.Userland
 import okhttp3.OkHttpClient
@@ -27,6 +28,7 @@ import ph.tools.Tool
 import ph.tools.ToolSchemas
 import ph.ui.DefaultThreadProjector
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 /** The user-editable settings half of the graph (SPEC §2.5 route + ADR-004 mode). */
 data class AppSettings(
@@ -104,6 +106,7 @@ class AppGraph(private val context: Context) {
     }
 
     val sessionStore = FileSessionStore(File(context.filesDir, "sessions"), clock)
+    val sessionUiStore = FileSessionUiStore(File(context.filesDir, "session-ui.json"))
     val trustStore = FileTrustStore(File(context.filesDir, "trust.json"))
     val secrets = AndroidSecretStore(context)
     val settingsStore = AndroidSettingsStore(context)
@@ -159,6 +162,8 @@ class AppGraph(private val context: Context) {
         )
         val dispatcher = DefaultToolDispatcher(tools, DefaultPolicyFloor(), trustStore, loaded.budgets)
         val http = OkHttpClient.Builder()
+            .connectTimeout(loaded.budgets.modelConnectTimeoutMs, TimeUnit.MILLISECONDS)
+            .readTimeout(loaded.budgets.modelReadTimeoutMs, TimeUnit.MILLISECONDS)
             .apply { if (BuildConfig.DEBUG) addInterceptor(DebugWireLogger()) } // DEBUG-ONLY
             .build()
         val client = OpenAiClient(route, secrets, clock, http, loaded.loop)
@@ -167,9 +172,11 @@ class AppGraph(private val context: Context) {
         runner = LinearAgentRunner(client, DefaultPromptAssembler(), dispatcher, clock)
     }
 
-    /** `filesDir/workspace/<session-id>/`, created on first use. Blocking, call off the main thread. */
-    fun workspaceFor(sessionId: String): File =
-        File(File(context.filesDir, WORKSPACE_DIR_NAME), sessionId).apply { mkdirs() }
+    /** `filesDir/workspace/<session-id>/` — the default per-session cwd, without creating it. */
+    fun workspacePath(sessionId: String): File = File(File(context.filesDir, WORKSPACE_DIR_NAME), sessionId)
+
+    /** The default workspace, created on first use. Blocking, call off the main thread. */
+    fun workspaceFor(sessionId: String): File = workspacePath(sessionId).apply { mkdirs() }
 
     fun hasApiKey(): Boolean = !secrets.get(API_KEY_REF).isNullOrBlank()
 

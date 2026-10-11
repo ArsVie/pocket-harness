@@ -118,6 +118,69 @@ class JsonlSessionLogTest {
         reopened.close()
     }
 
+    // ----- B-19 fix 3: a killed turn's dangling calls are closed with it ---------------------------
+
+    @Test
+    fun `closing an interrupted turn also closes the calls it left dangling`() {
+        val log = JsonlSessionLog(root, headerOf("dangling"), FakeClock(1_000))
+        log.append(SessionEvent.TurnStart(0, 0, 7))
+        log.append(SessionEvent.StepStart(0, 0, 7, 1))
+        log.append(SessionEvent.AssistantMessage(0, 0, 7, "", "the pipe is stuck"))
+        log.append(SessionEvent.ToolCall(0, 0, 7, 1, "c1", "bash", """{"command":"ls"}"""))
+        log.append(SessionEvent.ToolCall(0, 0, 7, 1, "c2", "bash", """{"command":"head -c1 /dev/udp/1.1.1.1/53"}"""))
+        // c1 answered, then the turn died on c2 — the shape the Redmi session was found in.
+        log.append(SessionEvent.ToolResult(0, 0, "c1", false, "out"))
+        log.append(SessionEvent.ToolCall(0, 0, 7, 1, "c3", "bash", """{"command":"echo never ran"}"""))
+        log.close()
+
+        val reopened = JsonlSessionLog(root, headerOf("dangling"), FakeClock(2_000))
+
+        // Seven events, then a synthetic result per dangling call, then the interrupt: the result lands
+        // at the tail of its own call block, which is what makes the transcript replayable.
+        assertEquals(10, reopened.events.size)
+        assertEquals((0 until 10).toList(), reopened.events.map { it.seq })
+        val repairs = reopened.events.subList(7, 9).map { it as SessionEvent.ToolResult }
+        assertEquals(listOf("c2", "c3"), repairs.map { it.callId })
+        assertTrue(repairs.all { it.isError })
+        assertEquals(
+            listOf("tool call not executed: turn interrupted", "tool call not executed: turn interrupted"),
+            repairs.map { it.text },
+        )
+        // c1 already had a result: recovery never duplicates one.
+        assertEquals(
+            listOf("c1", "c2", "c3"),
+            reopened.events.filterIsInstance<SessionEvent.ToolResult>().map { it.callId },
+        )
+        val repair = reopened.events.last() as SessionEvent.TurnEnd
+        assertEquals(7, repair.turn)
+        assertEquals(TurnEndReason.INTERRUPTED, repair.reason)
+        reopened.close()
+
+        // The repair is durable: reopening again adds nothing.
+        val again = JsonlSessionLog(root, headerOf("dangling"), FakeClock(3_000))
+        assertEquals(10, again.events.size)
+        again.close()
+    }
+
+    @Test
+    fun `a dangling call in an already closed turn is left to the projection`() {
+        val log = JsonlSessionLog(root, headerOf("old-dangling"), FakeClock(1_000))
+        log.append(SessionEvent.TurnStart(0, 0, 3))
+        log.append(SessionEvent.ToolCall(0, 0, 3, 1, "c1", "bash", """{"command":"head stuck"}"""))
+        log.append(SessionEvent.TurnEnd(0, 0, 3, TurnEndReason.INTERRUPTED))
+        log.append(SessionEvent.UserMessage(0, 0, "hi?"))
+        log.close()
+
+        val reopened = JsonlSessionLog(root, headerOf("old-dangling"), FakeClock(2_000))
+
+        // Nothing is appended: a result here would land *after* the user message, i.e. a tool message
+        // with no preceding call — the same 400 from the other side. The projection drops the unpaired
+        // call instead (DefaultPromptAssembler), and the session stays usable.
+        assertEquals(4, reopened.events.size)
+        assertTrue(reopened.events.filterIsInstance<SessionEvent.ToolResult>().isEmpty())
+        reopened.close()
+    }
+
     @Test
     fun `an unparsable final line is discarded`() {
         val log = JsonlSessionLog(root, headerOf("nope"), FakeClock(1_000))

@@ -1,7 +1,9 @@
 package ph.agent
 
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -219,6 +221,8 @@ class LinearAgentRunner(
     /**
      * Runs the calls of one assistant message, in model order, committing each result as it lands.
      * Returns null to carry on stepping, or the reason this turn has to close.
+     *
+     * Every exit goes through the `finally`, which closes any call still without a result (B-19).
      */
     private suspend fun dispatchAll(
         calls: List<ToolCallRequest>,
@@ -229,37 +233,64 @@ class LinearAgentRunner(
         val cap = preset.loop.toolCallsPerStepCap
         val cwd = session.header.cwd
         val mode = modeOf(session)
-        for (i in calls.indices) {
-            val call = calls[i]
-            if (aborted) {
-                appendSynthetic(session, calls, from = i, code = ToolErrorCode.ABORTED, message = ABORT_MESSAGE)
-                return TurnEndReason.ABORTED
+        try {
+            for (i in calls.indices) {
+                val call = calls[i]
+                if (aborted) {
+                    appendSynthetic(session, calls, from = i, code = ToolErrorCode.ABORTED, message = ABORT_MESSAGE)
+                    return TurnEndReason.ABORTED
+                }
+                if (i >= cap) {
+                    appendResult(
+                        session, call.id,
+                        ToolOutcome.Err(
+                            ToolErrorCode.BAD_ARGUMENT,
+                            "tool call rejected: more than $cap call(s) in one step",
+                        ),
+                    )
+                    continue
+                }
+                emit(LoopEvent.ToolStarted(call.id, call.name, commandOf(call)))
+                val outcome = tools.dispatch(call, cwd, mode)
+                appendResult(session, call.id, outcome)
+                emit(LoopEvent.ToolFinished(call.id, outcome))
+                if (outcome is ToolOutcome.Err && outcome.code == ToolErrorCode.DENIED) {
+                    appendSynthetic(
+                        session, calls, from = i + 1,
+                        code = ToolErrorCode.ABORTED, message = APPROVAL_MESSAGE,
+                    )
+                    emit(LoopEvent.ApprovalNeeded(cwd, call.id, commandOf(call)))
+                    return TurnEndReason.INTERRUPTED
+                }
+                warnIfStuck(call, preset.loop.repeatWarnAfter, emit)
             }
-            if (i >= cap) {
-                appendResult(
-                    session, call.id,
-                    ToolOutcome.Err(
-                        ToolErrorCode.BAD_ARGUMENT,
-                        "tool call rejected: more than $cap call(s) in one step",
-                    ),
-                )
-                continue
-            }
-            emit(LoopEvent.ToolStarted(call.id, call.name, commandOf(call)))
-            val outcome = tools.dispatch(call, cwd, mode)
-            appendResult(session, call.id, outcome)
-            emit(LoopEvent.ToolFinished(call.id, outcome))
-            if (outcome is ToolOutcome.Err && outcome.code == ToolErrorCode.DENIED) {
-                appendSynthetic(
-                    session, calls, from = i + 1,
-                    code = ToolErrorCode.ABORTED, message = APPROVAL_MESSAGE,
-                )
-                emit(LoopEvent.ApprovalNeeded(cwd, call.id, commandOf(call)))
-                return TurnEndReason.INTERRUPTED
-            }
-            warnIfStuck(call, preset.loop.repeatWarnAfter, emit)
+            return null
+        } finally {
+            // B-19: whatever ends this step — the loop running out, an abort, an approval stop, a
+            // dispatch that threw, or the coroutine being *cancelled* mid-dispatch (AppViewModel
+            // cancels the run job; the process can simply die) — no call logged here may be left
+            // without a result. Under `NonCancellable` because cancellation is the case that matters
+            // and a cancelled coroutine may not suspend: without it the cleanup is skipped and the
+            // dangling call bricks the session with provider 400s.
+            withContext(NonCancellable) { closeUnansweredCalls(session, calls) }
         }
-        return null
+    }
+
+    /**
+     * B-19: appends a synthetic result for every call of this step that has none — the call that was
+     * in flight when the turn died and every call that never got dispatched. Idempotent by call id,
+     * so the ABORTED and approval paths, which already closed their calls inside the loop, add
+     * nothing here.
+     */
+    private fun closeUnansweredCalls(session: Session, calls: List<ToolCallRequest>) {
+        val answered = session.events
+            .filterIsInstance<SessionEvent.ToolResult>()
+            .map { it.callId }
+            .toSet()
+        for (call in calls) {
+            if (call.id in answered) continue
+            appendResult(session, call.id, ToolOutcome.Err(ToolErrorCode.ABORTED, CANCEL_MESSAGE))
+        }
     }
 
     private fun appendResult(session: Session, callId: String, outcome: ToolOutcome) {
@@ -367,5 +398,8 @@ class LinearAgentRunner(
     private companion object {
         const val ABORT_MESSAGE = "tool call not executed: turn aborted"
         const val APPROVAL_MESSAGE = "tool call not executed: awaiting folder approval"
+
+        /** B-19: for calls the *cancellation* of the run caught (of which process death is one cause). */
+        const val CANCEL_MESSAGE = "tool call not executed: turn cancelled"
     }
 }

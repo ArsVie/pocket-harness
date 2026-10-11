@@ -12,3 +12,6 @@ captures/
 .env
 *.env
 !.env.example
+
+# Working notes — planning lives on disk for the agents, never in the public tree.
+planning/

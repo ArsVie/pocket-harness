@@ -67,7 +67,41 @@ class JsonlSessionLog(
         writer = FileOutputStream(file, true).bufferedWriter(Charsets.UTF_8)
         val interrupted = openTurn
         if (interrupted != null) {
+            // B-19: a turn killed in flight leaves a `tool_call` with no `tool_result` behind. Closing
+            // only the *turn* is not enough — the provider rejects every later request that replays an
+            // assistant message with an unanswered `tool_call_id` ("An assistant message with
+            // 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'"), so
+            // the session bricks itself. Close the calls first, then the turn: the results land where
+            // the repair belongs (right after the calls of that turn), exactly as the hand repair of
+            // `session-0bdd1bd1` did.
+            closeDanglingCalls(interrupted)
             append(SessionEvent.TurnEnd(0, 0, interrupted, TurnEndReason.INTERRUPTED))
+        }
+    }
+
+    /**
+     * B-19 recovery: appends a synthetic result for every `tool_call` of [turn] that never got one.
+     *
+     * Only the open turn is healed here. A dangling call from an *older*, already-closed turn cannot be
+     * repaired by appending: the result would land after later messages, which is a tool message with
+     * no preceding call — the mirror image of the same 400. That case is left to the projection, which
+     * drops a call it cannot pair (`DefaultPromptAssembler`).
+     */
+    private fun closeDanglingCalls(turn: Int) {
+        val answered = backing.filterIsInstance<SessionEvent.ToolResult>().map { it.callId }.toSet()
+        val dangling = backing
+            .filterIsInstance<SessionEvent.ToolCall>()
+            .filter { it.turn == turn && it.callId !in answered }
+        for (call in dangling) {
+            append(
+                SessionEvent.ToolResult(
+                    seq = 0,
+                    time = 0,
+                    callId = call.callId,
+                    isError = true,
+                    text = INTERRUPTED_CALL_TEXT,
+                ),
+            )
         }
     }
 
@@ -89,6 +123,9 @@ class JsonlSessionLog(
 
     companion object {
         const val SESSION_FILE_NAME: String = "session.jsonl"
+
+        /** B-19 recovery text for a call whose turn died before it could be dispatched. */
+        private const val INTERRUPTED_CALL_TEXT = "tool call not executed: turn interrupted"
 
         /** Opens an existing session by reading its header off disk; fails if there is none. */
         fun open(rootDir: File, id: String, clock: Clock): JsonlSessionLog {

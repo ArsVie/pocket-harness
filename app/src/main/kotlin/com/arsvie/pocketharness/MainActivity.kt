@@ -1,41 +1,47 @@
 package com.arsvie.pocketharness
 
+import android.Manifest
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.arsvie.pocketharness.platform.ExecProbe
-import com.arsvie.pocketharness.ui.ApprovalDialog
-import com.arsvie.pocketharness.ui.Composer
-import com.arsvie.pocketharness.ui.NewThreadRow
-import com.arsvie.pocketharness.ui.ScreenScaffold
+import com.arsvie.pocketharness.ui.SessionScreen
+import com.arsvie.pocketharness.ui.SessionsScreen
 import com.arsvie.pocketharness.ui.SettingsScreen
-import com.arsvie.pocketharness.ui.ThreadListScreen
-import com.arsvie.pocketharness.ui.ThreadViewScreen
+import com.arsvie.pocketharness.ui.theme.PhThemeRoot
+import com.arsvie.pocketharness.ui.theme.PhThemes
 
 /**
- * The app shell (ADR-005): three screens — thread list, thread view, settings — rendered from
- * [ph.ui.UiState] and driven by [AppViewModel]. No logic lives here; the state comes from `:core`
- * through the ViewModel.
+ * The app shell (UI-lab): three screens — sessions, session, settings — reached by real
+ * navigation (back + gear). The look is swappable at runtime (Settings -> Appearance); the host
+ * reads [AppViewModel.themeLook] and wraps everything in [PhThemeRoot].
  *
- * On start it also kicks off the in-app exec probe, which is the Wave-0 proof that the shipped
- * userland runs in-process on this device (writes filesDir/exec-probe.txt).
+ * On start it also kicks off the in-app exec probe, which is gated behind `files/run-probe` and
+ * writes `filesDir/exec-probe.txt` when asked for (B-3).
  */
 class MainActivity : ComponentActivity() {
 
+    private lateinit var viewModel: AppViewModel
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
 
         // DEBUG-ONLY test scaffolding: seed the route + key from filesDir/debug-env.json before the
         // graph is built. Gated on BuildConfig.DEBUG; a no-op in release (see DebugEnvBootstrap).
@@ -49,15 +55,37 @@ class MainActivity : ComponentActivity() {
             }
         }.start()
 
-        val viewModel = AppViewModel(applicationContext)
+        viewModel = AppViewModel(applicationContext)
 
         setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
+            val theme = PhThemes.of(viewModel.themeLook)
+            PhThemeRoot(theme) {
+                Surface(modifier = Modifier.fillMaxSize(), color = theme.colors.bg) {
                     PocketHarnessApp(viewModel)
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // B-12 §4: the exemption may have changed while we were away in system Settings.
+        viewModel.refreshBattery()
+    }
+
+    /**
+     * B-14 E2: the app is on screen, so a turn that ends now needs no ping — the thread is showing
+     * the outcome. [AppForeground] is read by the turn's `finally` block on the app's dispatcher.
+     */
+    override fun onStart() {
+        super.onStart()
+        AppForeground.visible = true
+    }
+
+    /** B-14 E2: Home, the launcher, or the screen going off — the ping's cue. */
+    override fun onStop() {
+        AppForeground.visible = false
+        super.onStop()
     }
 
     private companion object {
@@ -65,75 +93,78 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** Where the user is. One open session at a time is the ViewModel's own invariant. */
+private sealed interface Screen {
+    data object Sessions : Screen
+    data object Session : Screen
+    data object Settings : Screen
+}
+
 @Composable
 private fun PocketHarnessApp(vm: AppViewModel) {
     val ui = vm.ui
-    var tab by remember { mutableStateOf(0) }
+    var screen by remember { mutableStateOf<Screen>(Screen.Sessions) }
+    val backToSessions: () -> Unit = { screen = Screen.Sessions }
 
-    val tabs = listOf("Threads", "Thread", "Settings")
-    val subtitles = listOf(
-        "${ui.threads.size} threads",
-        ui.open?.title ?: "no thread open",
-        ui.settings?.let { "mode " + it.mode.name } ?: "loading…",
-    )
+    // B-14 E3: the Diagnostics row requests POST_NOTIFICATIONS at runtime. Either answer re-reads
+    // the status, so the row (and the B-12 battery line above it) shows what the system now says.
+    val notificationsPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { vm.refreshBattery() }
 
-    ScreenScaffold(
-        title = "PocketHarness",
-        subtitle = subtitles[tab],
-        tabs = tabs,
-        selected = tab,
-        onSelect = { tab = it },
-    ) {
-        when (tab) {
-            0 -> Column(modifier = Modifier.fillMaxSize()) {
-                NewThreadRow {
-                    vm.newThread()
-                    tab = 1
-                }
-                ThreadListScreen(
-                    threads = ui.threads,
-                    onOpen = { id ->
-                        vm.openThread(id)
-                        tab = 1
-                    },
-                )
-            }
+    BackHandler(enabled = screen != Screen.Sessions) { backToSessions() }
 
-            1 -> {
-                val open = ui.open
-                if (open == null) {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        NewThreadRow {
-                            vm.newThread()
-                            tab = 1
-                        }
-                    }
-                } else {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        Box(modifier = Modifier.weight(1f)) {
-                            ThreadViewScreen(open)
-                        }
-                        Composer(
-                            running = open.running,
-                            onSend = { vm.send(it) },
-                            onStop = { vm.stop() },
-                        )
-                    }
-                }
-            }
+    when (screen) {
+        Screen.Sessions -> SessionsScreen(
+            sessions = ui.threads,
+            // B2: "not read yet" is not "no sessions" — the screen renders neither count nor empty
+            // state until the first scan has landed.
+            loading = !vm.threadsLoaded,
+            onOpen = { id ->
+                vm.openSession(id)
+                screen = Screen.Session
+            },
+            onNew = {
+                vm.newSession()
+                screen = Screen.Session
+            },
+            onOpenSettings = { screen = Screen.Settings },
+            onRename = { id, title -> vm.renameSession(id, title) },
+            onPin = { id, pinned -> vm.setPinned(id, pinned) },
+            onPlace = { id, index -> vm.placeSession(id, index) },
+            onDelete = { id -> vm.deleteSession(id) },
+        )
 
-            else -> ui.settings?.let { settings ->
-                SettingsScreen(
-                    settings = settings,
-                    onModeChange = { mode -> vm.changeMode(mode) },
-                    onEdit = { field, value -> vm.editSetting(field, value) },
-                )
-            }
+        Screen.Session -> SessionScreen(
+            open = ui.open,
+            // B1: the neutral state belongs to the app shell, not to the projection.
+            loading = vm.threadLoading,
+            battery = vm.battery,
+            onBack = backToSessions,
+            onSend = { vm.send(it) },
+            onStop = { vm.stop() },
+            onDecideApproval = { vm.decideApproval(it) },
+            onOpenBattery = { vm.openBatterySettings() },
+        )
+
+        Screen.Settings -> ui.settings?.let { settings ->
+            SettingsScreen(
+                settings = settings,
+                shell = vm.shellInfo,
+                battery = vm.battery,
+                currentTheme = PhThemes.of(vm.themeLook),
+                onThemeSelected = { look -> vm.setTheme(look) },
+                onBack = backToSessions,
+                onModeChange = { mode -> vm.changeMode(mode) },
+                onEdit = { field, value -> vm.editSetting(field, value) },
+                onOpenBattery = { vm.openBatterySettings() },
+                onRequestNotifications = {
+                    notificationsPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                },
+                onOpenNotificationSettings = { vm.openNotificationSettings() },
+            )
+        } ?: Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(text = "Loading…")
         }
-    }
-
-    // Deliverable 5: the first-run approval, raised whenever the loop hits an untrusted folder.
-    ui.open?.pendingApproval?.let { prompt ->
-        ApprovalDialog(prompt = prompt, onDecide = { granted -> vm.decideApproval(granted) })
     }
 }

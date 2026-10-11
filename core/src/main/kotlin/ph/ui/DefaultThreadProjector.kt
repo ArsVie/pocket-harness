@@ -162,6 +162,14 @@ class DefaultThreadProjector : ThreadProjector {
     }
 
     private fun titleOf(header: SessionHeader, events: List<SessionEvent>): String {
+        // B-15: the newest non-blank rename (SessionTitle) is the newest word on the topic; the
+        // first user message is only the fallback.
+        val manual = events.asSequence()
+            .filterIsInstance<SessionEvent.SessionTitle>()
+            .map { it.title.trim() }
+            .lastOrNull { it.isNotEmpty() }
+            ?.take(TITLE_MAX_CHARS)
+        if (manual != null) return manual
         val firstUser = events.asSequence()
             .filterIsInstance<SessionEvent.UserMessage>()
             .firstOrNull()

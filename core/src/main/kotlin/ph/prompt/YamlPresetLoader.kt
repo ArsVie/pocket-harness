@@ -81,6 +81,8 @@ class YamlPresetLoader {
         pruneHeadChars = number(map, "pruneHeadChars", "budgets", source).toInt(),
         pruneTailChars = number(map, "pruneTailChars", "budgets", source).toInt(),
         verbatimToolResults = number(map, "verbatimToolResults", "budgets", source).toInt(),
+        modelConnectTimeoutMs = number(map, "modelConnectTimeoutMs", "budgets", source).toLong(),
+        modelReadTimeoutMs = number(map, "modelReadTimeoutMs", "budgets", source).toLong(),
     )
 
     private fun parseLoop(map: Map<*, *>, source: String): LoopConfig = LoopConfig(

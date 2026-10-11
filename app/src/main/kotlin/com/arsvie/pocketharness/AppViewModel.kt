@@ -23,12 +23,27 @@ import ph.ui.OpenThread
 import ph.ui.SettingsState
 import ph.ui.ThreadRow
 import ph.ui.UiState
+import com.arsvie.pocketharness.platform.BatteryOptimizations
+import com.arsvie.pocketharness.platform.BatteryStatus
+import com.arsvie.pocketharness.platform.ShellKind
+import com.arsvie.pocketharness.platform.Userland
+import com.arsvie.pocketharness.ui.theme.PhLook
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
 
 /** Which settings row is being edited (the dialog is app chrome, not `:core`). */
 enum class SettingsField { BASE_URL, MODEL, REASONING_EFFORT, API_KEY }
+
+/**
+ * B3 (hygiene): what a session with no manual title and no user message is called. The owner never
+ * sees a raw `session-<uuid>` — not in a list row, not in the thread header — so both the row title
+ * and the header title map "the title is the id" onto this one string.
+ */
+const val NEW_SESSION_TITLE = "New session"
+
+/** What shell the app is actually running (ADR-006) — shown in Settings → Diagnostics. */
+data class ShellInfo(val title: String, val detail: String)
 
 /**
  * The one state holder (ADR-005 §1: no logic in composables). It owns the [AppGraph], the open
@@ -42,6 +57,7 @@ class AppViewModel(context: Context) {
 
     private val app = context.applicationContext
     private val graph = AppGraph(app)
+    private val prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val io = Executors.newSingleThreadExecutor { r -> Thread(r, THREAD_NAME) }
         .asCoroutineDispatcher()
     private val scope = CoroutineScope(SupervisorJob() + io)
@@ -49,25 +65,111 @@ class AppViewModel(context: Context) {
     var ui by mutableStateOf(UiState())
         private set
 
+    /** Filled async at start-up: which shell the self-test proved works (ADR-006). */
+    var shellInfo by mutableStateOf<ShellInfo?>(null)
+        private set
+
+    /** Battery-exemption state (B-12): read at start-up and re-read on every resume. */
+    var battery by mutableStateOf<BatteryStatus?>(null)
+        private set
+
+    /**
+     * B2 (hygiene): false until the first [refreshThreads] has completed. An empty thread list means
+     * two different things before and after that scan — "not read yet" and "the owner has no
+     * sessions" — and the list must not claim the second one while it is still the first.
+     */
+    var threadsLoaded by mutableStateOf(false)
+        private set
+
+    /**
+     * B1 (hygiene): true while a session's log is being created/opened off the main thread. While it
+     * is set, [publish] withholds `open` entirely, so the previously open session's blocks are never
+     * rendered as if they were the session the user just tapped.
+     */
+    var threadLoading by mutableStateOf(false)
+        private set
+
+    /** The active UI look (UI-lab); persisted across launches. */
+    var themeLook by mutableStateOf(
+        runCatching { PhLook.valueOf(prefs.getString(KEY_THEME, "") ?: "") }
+            .getOrDefault(PhLook.GINGERBREAD),
+    )
+        private set
+
+    fun setTheme(look: PhLook) {
+        themeLook = look
+        prefs.edit().putString(KEY_THEME, look.name).apply()
+    }
+
+    /**
+     * B-12 §4: called from `Activity.onResume`. The user may have toggled the exemption in
+     * Settings, so re-read instead of trusting the value fetched at start-up.
+     */
+    fun refreshBattery() {
+        battery = BatteryOptimizations.read(app)
+    }
+
+    /** Opens this app's battery page; false when nothing resolved (card shows the manual path). */
+    fun openBatterySettings(): Boolean = BatteryOptimizations.openSettings(app)
+
+    /**
+     * Opens this app's notification page (B-14 E3); false when nothing resolved either. The runtime
+     * request in Settings → Diagnostics is the primary path — this is the way out when the request
+     * cannot be shown or was already denied.
+     */
+    fun openNotificationSettings(): Boolean = BatteryOptimizations.openNotificationSettings(app)
+
     private var threads: List<ThreadRow> = emptyList()
     private var settingsRow: SettingsState? = null
     private var session: Session? = null
+
+    /**
+     * B1: the thread published while a session is being created — an empty thread carrying the id the
+     * log will get, so the screen has something honest to render before the file exists. Cleared as
+     * soon as the real [session] is in place.
+     */
+    private var transientOpen: OpenThread? = null
+
+    /**
+     * B1: the session id the UI is currently waiting for. `open()` publishes nothing for any other
+     * id, so a queued open from an earlier tap cannot clobber a newer target (session row or a fresh
+     * placeholder thread).
+     */
+    private var loadTarget: String? = null
     private val live = mutableListOf<LoopEvent>()
     private val pendingSteer = mutableListOf<String>()
     private var running = false
     private var runJob: Job? = null
     private var mode: ExecutionMode = graph.settings.mode
 
+    /**
+     * B-14 E4: set once the owner has stopped the turn (composer or notification), and cleared with
+     * `live` when the next turn starts. A pending approval prompt is an affordance of the turn that
+     * asked for it, so from here on it is kept out of the published state — including a
+     * [LoopEvent.ApprovalNeeded] the runner emits *on its way out*, which is the case a one-shot
+     * "drop the event now" would miss: a tool call already in flight can still come back denied and
+     * ask, long after Stop was pressed.
+     */
+    private var approvalAbandoned = false
+
     init {
+        // B-14 E1: the notification's Stop action reaches the turn through this process-scoped seam
+        // and nowhere else. The service stays stateless; the newest install wins.
+        TurnControl.install { stop() }
         scope.launch {
             try {
                 graph.prepare()
                 mode = graph.settings.mode
                 refreshThreads()
+                shellInfo = readShellInfo()
+                battery = BatteryOptimizations.read(app)
             } catch (t: Throwable) {
                 // A start-up failure (bad preset, no userland) is surfaced, never swallowed.
                 appendFailure(null, t)
             }
+            // B2: after this line an empty list really is "no sessions"; before it, it is "unknown".
+            // Set on the failure path too, so a broken start-up cannot leave the list loading forever.
+            threadsLoaded = true
             publish()
             // Open the newest transcript, if any, so the app starts on real data.
             threads.firstOrNull()?.let { open(it.id) }
@@ -76,13 +178,35 @@ class AppViewModel(context: Context) {
 
     // ---- public surface ------------------------------------------------------------------------
 
-    fun newThread() {
+    /**
+     * B1: the thread screen is shown the instant the user taps +, so the empty thread is published
+     * **synchronously** here, before the coroutine that creates the log. Session creation stays on the
+     * single io dispatcher: [JsonlSessionLog]'s constructor writes the header file, so it cannot move
+     * off it, and the dispatcher is single-threaded, so the send() that may follow cannot overtake it.
+     */
+    fun newSession() {
+        val id = newSessionId()
+        // Claim the load token: an open() queued by an earlier tap is stale now and must not publish.
+        loadTarget = id
+        threadLoading = false
+        transientOpen = OpenThread(
+            id = id,
+            title = NEW_SESSION_TITLE,
+            blocks = emptyList(),
+            running = false,
+            statusLine = null,
+            pendingApproval = null,
+            mode = mode,
+        )
+        clearLive()
+        pendingSteer.clear()
+        session = null
+        publish()
         scope.launch {
             ensureReady()
-            live.clear()
-            pendingSteer.clear()
-            val created = newSession()
+            val created = createSession(id)
             session = created
+            transientOpen = null
             mode = graph.settings.mode
             created.append(SessionEvent.ModeSelected(seq = 0, time = 0, mode = mode))
             refreshThreads()
@@ -90,15 +214,39 @@ class AppViewModel(context: Context) {
         }
     }
 
-    fun openThread(id: String) = scope.launch { open(id) }
+    /**
+     * B1: the previous session must not be rendered while the target one is replayed, so the neutral
+     * loading state goes out synchronously and the log is opened inside the coroutine.
+     */
+    fun openSession(id: String) {
+        beginLoad(id)
+        scope.launch { open(id) }
+    }
+
+    /**
+     * The neutral pre-open state: no thread, no queued steer, nothing of the previous session left.
+     * [loadTarget] remembers which id the UI is waiting for, so a faster tap on a *different* row
+     * supersedes this one instead of letting a stale open publish its thread (B1).
+     */
+    private fun beginLoad(id: String) {
+        loadTarget = id
+        transientOpen = null
+        threadLoading = true
+        clearLive()
+        pendingSteer.clear()
+        session = null
+        publish()
+    }
 
     fun send(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
         scope.launch {
             ensureReady()
-            val current = session ?: newSession().also {
+            val current = session ?: createSession().also {
                 session = it
+                // B1: a real session replaces any placeholder thread that was still up.
+                transientOpen = null
                 it.append(SessionEvent.ModeSelected(seq = 0, time = 0, mode = mode))
                 refreshThreads()
             }
@@ -116,8 +264,20 @@ class AppViewModel(context: Context) {
         }
     }
 
+    /**
+     * Ends the running turn. Two callers, both on the main thread: the composer, and the
+     * notification's Stop action (B-14 E1, through [TurnControl]). Neither touches turn state here —
+     * the runner's abort flag is volatile by design, and everything else (the E4 drop of a pending
+     * approval included) happens on the app's single dispatcher, where all the other state lives.
+     */
     fun stop() {
         graph.runner.stop()
+        scope.launch {
+            // B-14 E4: a stopped turn's approval prompt is moot — nothing is answered from the shade,
+            // and the turn is over. `publish` is where that decision becomes unmissable.
+            approvalAbandoned = true
+            publish()
+        }
     }
 
     fun changeMode(newMode: ExecutionMode) {
@@ -162,16 +322,106 @@ class AppViewModel(context: Context) {
                 current.append(
                     SessionEvent.ApprovalDecided(seq = 0, time = 0, cwd = prompt.cwd, granted = true),
                 )
-                live.clear()
+                clearLive()
                 publish()
                 startTurn()
             } else {
                 current.append(
                     SessionEvent.ApprovalDecided(seq = 0, time = 0, cwd = prompt.cwd, granted = false),
                 )
-                live.clear()
+                clearLive()
                 publish()
             }
+        }
+    }
+
+    // ---- session management (B-15) ---------------------------------------------------------------
+
+    /** Renames the session: appends a [SessionEvent.SessionTitle], the newest of which wins. */
+    fun renameSession(id: String, title: String) {
+        val clean = title.trim().take(TITLE_MAX_CHARS)
+        if (clean.isEmpty()) return
+        scope.launch {
+            ensureReady()
+            val event = SessionEvent.SessionTitle(seq = 0, time = 0, title = clean)
+            val current = session
+            if (current != null && current.header.id == id) {
+                current.append(event)
+            } else {
+                val opened = graph.sessionStore.open(id)
+                try {
+                    opened.append(event)
+                } finally {
+                    opened.close()
+                }
+            }
+            refreshThreads()
+            publish()
+        }
+    }
+
+    fun setPinned(id: String, pinned: Boolean) {
+        scope.launch {
+            graph.sessionUiStore.setPinned(id, pinned)
+            refreshThreads()
+            publish()
+        }
+    }
+
+    /**
+     * B-21 A1: the drop of a hold-drag. The store refuses an index outside the row's own pin-block
+     * (A5) and refuses a no-op, both of which leave the rendered order untouched — the row springs
+     * back on screen because its drag offset is dropped with the drop.
+     */
+    fun placeSession(id: String, displayIndex: Int) {
+        scope.launch {
+            // A refused placement (outside the row's pin-block, unknown id, no-op) changed nothing,
+            // so there is nothing to re-derive or publish.
+            if (!graph.sessionUiStore.placeAt(id, displayIndex)) return@launch
+            refreshThreads()
+            publish()
+        }
+    }
+
+    /**
+     * Deletes a session into the app's trash (B-15). A running turn blocks its own session's delete.
+     * The default per-session workspace moves to the trash with it; a custom folder is left alone.
+     */
+    fun deleteSession(id: String) {
+        scope.launch {
+            ensureReady()
+            val current = session
+            if (current != null && current.header.id == id) {
+                if (running) return@launch
+                runCatching { current.close() }
+                session = null
+            }
+            val cwd = runCatching { graph.sessionStore.open(id) }.getOrNull()?.let { opened ->
+                try {
+                    opened.header.cwd
+                } finally {
+                    opened.close()
+                }
+            }
+            graph.sessionStore.delete(id)
+            graph.sessionUiStore.forget(id)
+            if (cwd != null && cwd == graph.workspacePath(id).absolutePath) {
+                trashWorkspace(id)
+            }
+            refreshThreads()
+            publish()
+        }
+    }
+
+    private fun trashWorkspace(id: String) {
+        val source = graph.workspacePath(id)
+        if (!source.isDirectory) return
+        val trash = File(app.filesDir, TRASH_WORKSPACES_DIR)
+        trash.mkdirs()
+        val target = File(trash, graph.clock.nowMillis().toString() + "-" + id)
+        if (!source.renameTo(target)) {
+            source.copyRecursively(target, overwrite = true)
+            source.deleteRecursively()
         }
     }
 
@@ -181,8 +431,10 @@ class AppViewModel(context: Context) {
         val current = session ?: return
         runJob?.cancel()
         runJob = scope.launch {
-            live.clear()
+            clearLive()
             running = true
+            // B-14 E2: the previous turn's ping is stale the moment a new turn starts.
+            TurnNotifications.cancelFinished(app)
             // ADR-005 §5: foreground for the whole turn, so Home / screen-off cannot freeze us.
             TurnService.start(app)
             publish()
@@ -198,6 +450,14 @@ class AppViewModel(context: Context) {
                 running = false
                 // One active turn at a time: the service lives exactly as long as the turn does.
                 TurnService.stop(app)
+                // B-14 E2: the ping, posted from the turn's own `finally` — and only when the app is
+                // not what the owner is looking at (in the foreground the thread already shows the
+                // outcome). A plain NotificationManager post on id 2: not a service call, so it can
+                // never bring the service back (B-1). Copy is outcome-aware; `live` is this turn's
+                // events, cleared when it started.
+                if (!AppForeground.visible) {
+                    TurnNotifications.postFinished(app, failed = live.any { it is LoopEvent.Failed })
+                }
                 reconcileSteering()
                 refreshThreads()
                 publish()
@@ -228,17 +488,38 @@ class AppViewModel(context: Context) {
 
     // ---- plumbing ------------------------------------------------------------------------------
 
+    /**
+     * Drops the live events of the previous turn. B-14 E4 rides along: with them goes the
+     * stop-abandoned flag, so the *next* turn's approval prompt is projected normally, while a
+     * stopped turn's can never come back (there is nothing left to project it from).
+     */
+    private fun clearLive() {
+        live.clear()
+        approvalAbandoned = false
+    }
+
     private fun ensureReady() {
         if (!graph.isReady) graph.prepare()
     }
 
     private fun open(id: String) {
-        ensureReady()
-        live.clear()
-        pendingSteer.clear()
-        val opened = graph.sessionStore.open(id)
-        session = opened
-        mode = resolveSessionMode(opened.header, opened.events, graph.settings.mode)
+        // Superseded by a newer tap: the newer open will publish; this one leaves the neutral state up.
+        if (loadTarget != null && loadTarget != id) return
+        try {
+            ensureReady()
+            val opened = graph.sessionStore.open(id)
+            clearLive()
+            pendingSteer.clear()
+            session = opened
+            mode = resolveSessionMode(opened.header, opened.events, graph.settings.mode)
+        } catch (t: Throwable) {
+            // Nothing to append to (there is no session): surface it and leave the neutral state up.
+            appendFailure(null, t)
+        }
+        if (loadTarget == id) {
+            loadTarget = null
+            threadLoading = false
+        }
         publish()
     }
 
@@ -246,10 +527,10 @@ class AppViewModel(context: Context) {
      * `SessionStore.create(cwd, presetId)` derives the id internally, so the caller cannot key a
      * workspace path on it (contract friction, reported). The log is therefore created directly with
      * the id we generate, which is byte-identical to what the store would have produced and is
-     * picked up by `FileSessionStore.list()`.
+     * picked up by `FileSessionStore.list()`. [id] is passed in by [newSession] so the placeholder
+     * thread it publishes synchronously already carries the id the log gets (B1).
      */
-    private fun newSession(): Session {
-        val id = SESSION_ID_PREFIX + UUID.randomUUID()
+    private fun createSession(id: String = newSessionId()): Session {
         val workspace = graph.workspaceFor(id)
         val header = SessionHeader(
             id = id,
@@ -260,32 +541,87 @@ class AppViewModel(context: Context) {
         return JsonlSessionLog(File(app.filesDir, "sessions"), header, graph.clock)
     }
 
-    private fun refreshThreads() {
-        threads = graph.sessionStore.list().map { summary ->
-            ThreadRow(
-                id = summary.id,
-                title = summary.title,
-                subtitle = "seq ${summary.lastSeq} · " + summary.cwd,
-                updatedAt = summary.updatedAt,
+    private fun newSessionId(): String = SESSION_ID_PREFIX + UUID.randomUUID()
+
+    /** Resolve the shell (self-test exec) and read its version banner; cheap, runs once. */
+    private fun readShellInfo(): ShellInfo = runCatching {
+        val bin = Userland.resolveShell(app)
+        if (bin.kind == ShellKind.BASH) {
+            val first = Userland.execDirect(listOf(bin.chosen.absolutePath, "--version"))
+                .out.lineSequence().firstOrNull().orEmpty()
+            val short = first.substringAfter("version ", "").substringBefore(" ")
+            ShellInfo(
+                title = "GNU bash" + if (short.isNotEmpty()) " $short" else "",
+                detail = bin.chosen.absolutePath,
             )
+        } else {
+            ShellInfo(title = "Platform shell (mksh + toybox)", detail = bin.chosen.absolutePath)
         }
+    }.getOrElse { t ->
+        ShellInfo(title = "Unavailable", detail = t.message ?: t::class.simpleName.orEmpty())
+    }
+
+    private fun refreshThreads() {
+        val summaries = graph.sessionStore.list()
+        val uiStore = graph.sessionUiStore
+        uiStore.reconcile(summaries.map { it.id })
+        val pins = uiStore.pinnedIds()
+        val rank = uiStore.orderedIds().withIndex().associate { (index, id) -> id to index }
+        // B-15 display rule: pinned sessions first, then the rest; inside a block the manual order —
+        // new sessions land on top of their block (reconcile prepends unknown ids).
+        threads = summaries
+            .sortedWith(compareBy({ it.id !in pins }, { rank[it.id] ?: Int.MAX_VALUE }))
+            .map { summary ->
+                ThreadRow(
+                    id = summary.id,
+                    title = displayTitle(summary.title, summary.id),
+                    subtitle = eventCountLabel(summary.lastSeq),
+                    updatedAt = summary.updatedAt,
+                    pinned = summary.id in pins,
+                )
+            }
+    }
+
+    /** B3: the store falls back to the raw id for an untitled session; the owner sees copy instead. */
+    private fun displayTitle(title: String, id: String): String =
+        if (title == id) NEW_SESSION_TITLE else title
+
+    /**
+     * B3: the row's second line is the honest number of events in the log and nothing else — no
+     * sandbox path. `lastSeq` is the last written seq, or -1 for a session with no events
+     * (`FileSessionStore.LAST_SEQ_EMPTY`), so the count is `lastSeq + 1` floored at zero.
+     */
+    private fun eventCountLabel(lastSeq: Int): String {
+        val count = (lastSeq + COUNT_FIRST_SEQ).coerceAtLeast(0)
+        return if (count == 1) ONE_EVENT else "$count $EVENTS"
     }
 
     private fun publish() {
         val current = session
-        val projected: OpenThread? = current?.let {
-            graph.projector.project(
-                header = it.header,
-                events = it.events,
-                live = live.toList(),
-                mode = mode,
-                running = running,
-            )
-        }
-        val withQueued = if (projected != null && pendingSteer.isNotEmpty()) {
-            projected.copy(blocks = projected.blocks + pendingSteer.map { Block.UserText(it, queued = true) })
+        // B1: while a log is being created/opened, or while the empty placeholder of a fresh session
+        // is up, the *previous* session's projection must not reach the screen.
+        val projected: OpenThread? = if (threadLoading) {
+            null
         } else {
-            projected
+            transientOpen ?: current?.let {
+                graph.projector.project(
+                    header = it.header,
+                    events = it.events,
+                    live = live.toList(),
+                    mode = mode,
+                    running = running,
+                )
+            }
+        }
+        // B-14 E4: an approval card belongs to the turn that asked for it, so a stopped turn's card
+        // is dropped *here* — the one funnel every publish goes through. That is what makes the
+        // guarantee hold for a card the runner only asks for on its way out (see
+        // [approvalAbandoned]) instead of relying on the stop having arrived at the right moment.
+        val withApproval = if (approvalAbandoned) projected?.copy(pendingApproval = null) else projected
+        val withQueued = if (withApproval != null && pendingSteer.isNotEmpty()) {
+            withApproval.copy(blocks = withApproval.blocks + pendingSteer.map { Block.UserText(it, queued = true) })
+        } else {
+            withApproval
         }
         settingsRow = SettingsState(
             mode = mode,
@@ -301,5 +637,23 @@ class AppViewModel(context: Context) {
     private companion object {
         const val THREAD_NAME = "ph-app"
         const val SESSION_ID_PREFIX = "session-"
+
+        /** Mirrors the store's inbox title rule (`FileSessionStore.TITLE_MAX_CHARS`). */
+        const val TITLE_MAX_CHARS = 60
+
+        /**
+         * B3: event counts are UI copy, not tunables — the singular is spelled out rather than
+         * pluralised ("1 event", "0 events", "7 events").
+         */
+        const val ONE_EVENT = "1 event"
+        const val EVENTS = "events"
+
+        /** Seqs are contiguous from 0 (SPEC §2.3), so an event count is `lastSeq + 1`. */
+        const val COUNT_FIRST_SEQ = 1
+
+        /** B-15 delete: default per-session workspaces move under `filesDir/trash/workspaces/`. */
+        const val TRASH_WORKSPACES_DIR = "trash/workspaces"
+        const val PREFS_NAME = "ph_ui"
+        const val KEY_THEME = "theme"
     }
 }
