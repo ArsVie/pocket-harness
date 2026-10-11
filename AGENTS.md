@@ -3,6 +3,9 @@
 Android coding harness. Read `planning/SPEC.md` before writing code; it is the frozen contract.
 Decisions live in `planning/decisions/` (ADRs) and are not re-litigated in code.
 
+`planning/` holds the owner's working notes and is gitignored, so it exists only in a local
+checkout. In a fresh clone, the ADR and SPEC references in code comments point at those notes.
+
 Build: this is a Gradle project on the Linux filesystem, built from WSL.
 
 ```
